@@ -7,7 +7,7 @@ slash commands in Claude Code sessions.
 
 from .parser import MarkdownParser, CommandBlock, FrontmatterData
 from .registry import CommandRegistry, Command, CommandCategory
-from .executor import CommandExecutor, ExecutionContext, ExecutionResult
+from .executor import CommandExecutor, ExecutionContext, ExecutionResult, ExecutionStatus, ExecutionPriority
 
 __all__ = [
     'MarkdownParser',
@@ -18,5 +18,7 @@ __all__ = [
     'CommandCategory',
     'CommandExecutor',
     'ExecutionContext',
-    'ExecutionResult'
+    'ExecutionResult',
+    'ExecutionStatus',
+    'ExecutionPriority'
 ]
