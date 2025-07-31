@@ -87,11 +87,7 @@ temp/
 .DS_Store
 Thumbs.db
 
-# Agent artifacts and working directories
-.claude/agents/*/current/
-.claude/agents/*/artifacts/
-.claude/agents/*/state.json
-.claude/projects/
+
 
 # Session data
 session_cache/
