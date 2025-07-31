@@ -1,0 +1,12 @@
+{
+  "name": "mcp-shared-memory",
+  "description": "Manage shared memory context across all MCP implementation agents",
+  "category": "mcp-implementation",
+  "created_at": "2025-07-31T16:00:53.172431",
+  "version": "1.0.0",
+  "type": "slash-command",
+  "metadata": {
+    "source": "claude-code-mcp-server",
+    "type": "orchestration-command"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "mcp-agent-progress",
+  "description": "Track and report agent progress on MCP implementation tasks",
+  "category": "mcp-implementation",
+  "created_at": "2025-07-31T16:00:53.173930",
+  "version": "1.0.0",
+  "type": "slash-command",
+  "metadata": {
+    "source": "claude-code-mcp-server",
+    "type": "orchestration-command"
+  }
+}
