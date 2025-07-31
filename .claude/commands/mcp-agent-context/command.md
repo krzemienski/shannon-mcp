@@ -32,7 +32,7 @@ This command provides a unified interface for agents to:
 Example:
 ```bash
 /mcp-agent-context save \
-  --agent mcp-architecture-agent \
+  --agent "Architecture Agent" \
   --type design \
   --artifact "BinaryManager class design with async discovery methods"
 ```
@@ -55,8 +55,8 @@ Example:
 Example:
 ```bash
 /mcp-agent-context share \
-  --from mcp-claude-sdk-expert \
-  --to mcp-streaming-agent \
+  --from "Claude SDK Expert" \
+  --to "Streaming Agent" \
   --knowledge "JSONL format: each line must be valid JSON, use async readline"
 ```
 
@@ -68,7 +68,7 @@ Example:
 Example:
 ```bash
 /mcp-agent-context decide \
-  --agent mcp-architecture-agent \
+  --agent "Architecture Agent" \
   --decision "Use asyncio for all I/O operations" \
   --rationale "Required for high-throughput streaming and concurrent sessions"
 ```
@@ -80,7 +80,7 @@ Example:
 
 Example:
 ```bash
-/mcp-agent-context query --topic "JSONL parsing" --agent mcp-jsonl-streaming
+/mcp-agent-context query --topic "JSONL parsing" --agent "JSONL Agent"
 ```
 
 #### `checkpoint` - Create context checkpoint
@@ -133,8 +133,8 @@ Saves current state of all agent contexts for recovery.
   "name": "AsyncStreamReader",
   "description": "Pattern for reading JSONL streams",
   "code_example": "async for line in stream: ...",
-  "discovered_by": "mcp-streaming-agent",
-  "used_in": ["session-manager", "checkpoint-reader"]
+  "discovered_by": "Streaming Agent",
+  "used_in": ["Session Orchestrator", "Checkpoint Expert"]
 }
 ```
 
@@ -145,7 +145,7 @@ Saves current state of all agent contexts for recovery.
   "component": "binary-discovery",
   "problem": "NVM paths not in standard PATH",
   "solution": "Check ~/.nvm/versions/node/*/bin/",
-  "found_by": "mcp-platform-compatibility",
+  "found_by": "Platform Compatibility",
   "severity": "medium"
 }
 ```
@@ -157,8 +157,8 @@ Saves current state of all agent contexts for recovery.
   "area": "error-handling",
   "practice": "Always use custom exceptions",
   "rationale": "Better debugging and error recovery",
-  "proposed_by": "mcp-error-handling",
-  "approved_by": "mcp-architecture-agent"
+  "proposed_by": "Error Handler",
+  "approved_by": "Architecture Agent"
 }
 ```
 
@@ -212,7 +212,7 @@ When an agent starts working on a task:
 /mcp-agent-context decisions --topic "asyncio"
 
 # What did security agent say about subprocess?
-/mcp-agent-context decisions --agent mcp-security-validation --topic "subprocess"
+/mcp-agent-context decisions --agent "Security Agent" --topic "subprocess"
 ```
 
 ### Track Dependencies

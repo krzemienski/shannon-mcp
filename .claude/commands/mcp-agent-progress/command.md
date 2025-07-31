@@ -230,7 +230,7 @@ def generate_progress_chart(phase: int) -> str:
 ```bash
 # Agent notifies progress
 /mcp-agent-context save \
-  --agent mcp-architecture-agent \
+  --agent "Architecture Agent" \
   --type progress \
   --artifact "Binary Manager design 85% complete"
 
@@ -239,7 +239,7 @@ def generate_progress_chart(phase: int) -> str:
 
 # Progress tracker updates
 /mcp-agent-progress update \
-  --agent mcp-architecture-agent \
+  --agent "Architecture Agent" \
   --task 3.1 \
   --progress 85
 ```

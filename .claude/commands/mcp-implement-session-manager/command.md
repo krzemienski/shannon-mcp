@@ -29,7 +29,7 @@ Workflow sequence:
 1. Architecture Agent designs session architecture
 2. Streaming Agent implements JSONL parsing
 3. Storage Agent designs checkpoint system
-4. Functional Agent implements workflows
+4. Session Orchestrator implements workflows
 5. Testing Agent creates test suites
 
 #### `design` - Create architecture design

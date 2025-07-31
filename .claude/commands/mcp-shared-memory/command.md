@@ -36,7 +36,7 @@ Example:
   --key "jsonl-parsing-pattern" \
   --value "Always use readline() with buffering for JSONL streams" \
   --type pattern \
-  --agent mcp-jsonl-streaming
+  --agent "JSONL Agent"
 ```
 
 #### `retrieve` - Get knowledge from shared memory

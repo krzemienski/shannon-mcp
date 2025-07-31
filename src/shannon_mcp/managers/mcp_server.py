@@ -34,6 +34,7 @@ from ..utils.errors import (
 )
 from ..utils.notifications import emit, EventCategory, EventPriority, event_handler
 from ..utils.logging import get_logger
+from ..transport import TransportManager, StdioTransport, SSETransport, ConnectionState as TransportConnectionState
 
 
 logger = get_logger("shannon-mcp.mcp-server")
@@ -54,6 +55,19 @@ class ConnectionState(Enum):
     CONNECTED = "connected"
     ERROR = "error"
     RECONNECTING = "reconnecting"
+    
+    @classmethod
+    def from_transport_state(cls, transport_state: TransportConnectionState) -> 'ConnectionState':
+        """Convert transport connection state to manager connection state."""
+        mapping = {
+            TransportConnectionState.DISCONNECTED: cls.DISCONNECTED,
+            TransportConnectionState.CONNECTING: cls.CONNECTING,
+            TransportConnectionState.CONNECTED: cls.CONNECTED,
+            TransportConnectionState.CLOSING: cls.DISCONNECTED,
+            TransportConnectionState.CLOSED: cls.DISCONNECTED,
+            TransportConnectionState.ERROR: cls.ERROR
+        }
+        return mapping.get(transport_state, cls.ERROR)
 
 
 @dataclass
@@ -122,6 +136,7 @@ class Connection:
     """Active MCP server connection."""
     server_id: str
     state: ConnectionState
+    transport_name: str
     process: Optional[asyncio.subprocess.Process] = None
     session: Optional[aiohttp.ClientSession] = None
     last_ping: Optional[datetime] = None
@@ -164,6 +179,9 @@ class MCPServerManager(BaseManager[MCPServer]):
         # Connection pools
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._connection_locks: Dict[str, asyncio.Lock] = {}
+        
+        # Transport manager
+        self._transport_manager = TransportManager()
     
     async def _initialize(self) -> None:
         """Initialize MCP server manager."""
@@ -176,6 +194,9 @@ class MCPServerManager(BaseManager[MCPServer]):
         
         # Load servers from database
         await self._load_servers()
+        
+        # Register message handlers
+        self._register_message_handlers()
         
         # Start auto-discovery if enabled
         if self.mcp_config.auto_discovery:
@@ -466,24 +487,47 @@ class MCPServerManager(BaseManager[MCPServer]):
         # Get connection lock
         async with self._connection_locks[server_id]:
             with error_context("mcp_server_manager", "connect_server", server_id=server_id):
-                # Create connection
+                # Create transport based on type
+                transport_name = f"{server.name}_{server.id}"
+                
+                if server.transport == TransportType.STDIO:
+                    transport = await self._transport_manager.add_process_stdio_transport(
+                        name=transport_name,
+                        command=server.command,
+                        args=server.args,
+                        env=server.env
+                    )
+                elif server.transport == TransportType.SSE:
+                    transport = await self._transport_manager.add_sse_transport(
+                        name=transport_name,
+                        base_url=server.endpoint,
+                        headers={"Authorization": f"Bearer {server.config.get('api_key', '')}"}  
+                        if server.config.get('api_key') else None
+                    )
+                elif server.transport == TransportType.HTTP:
+                    # Use SSE transport for HTTP (with different config)
+                    transport = await self._transport_manager.add_sse_transport(
+                        name=transport_name,
+                        base_url=server.endpoint,
+                        endpoint="",  # HTTP uses base URL directly
+                        headers={"Authorization": f"Bearer {server.config.get('api_key', '')}"}  
+                        if server.config.get('api_key') else None
+                    )
+                else:
+                    raise SystemError(f"Unsupported transport: {server.transport}")
+                
+                # Create connection object
                 connection = Connection(
                     server_id=server_id,
-                    state=ConnectionState.CONNECTING
+                    state=ConnectionState.CONNECTING,
+                    transport_name=transport_name
                 )
                 
                 self._connections[server_id] = connection
                 
                 try:
-                    # Connect based on transport type
-                    if server.transport == TransportType.STDIO:
-                        await self._connect_stdio(server, connection)
-                    elif server.transport == TransportType.SSE:
-                        await self._connect_sse(server, connection)
-                    elif server.transport == TransportType.HTTP:
-                        await self._connect_http(server, connection)
-                    else:
-                        raise SystemError(f"Unsupported transport: {server.transport}")
+                    # Connect transport
+                    await self._transport_manager.connect(transport_name)
                     
                     # Mark as connected
                     connection.state = ConnectionState.CONNECTED
@@ -567,18 +611,10 @@ class MCPServerManager(BaseManager[MCPServer]):
                 self._health_check_tasks[server_id].cancel()
                 del self._health_check_tasks[server_id]
             
-            # Close connection based on transport
+            # Disconnect transport
             try:
-                if connection.process:
-                    connection.process.terminate()
-                    try:
-                        await asyncio.wait_for(connection.process.wait(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        connection.process.kill()
-                        await connection.process.wait()
-                
-                if connection.session:
-                    await connection.session.close()
+                await self._transport_manager.disconnect(connection.transport_name)
+                await self._transport_manager.remove_transport(connection.transport_name)
                 
             except Exception as e:
                 logger.error(
@@ -628,64 +664,6 @@ class MCPServerManager(BaseManager[MCPServer]):
         """List all active connections."""
         return list(self._connections.values())
     
-    async def send_request(
-        self,
-        server_id: str,
-        method: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
-        """
-        Send JSON-RPC request to MCP server.
-        
-        Args:
-            server_id: Server ID
-            method: JSON-RPC method
-            params: Method parameters
-            timeout: Request timeout
-            
-        Returns:
-            Response data
-            
-        Raises:
-            ValidationError: If server not connected
-            SystemError: If request fails
-        """
-        connection = self._connections.get(server_id)
-        if not connection or connection.state != ConnectionState.CONNECTED:
-            raise ValidationError("server_id", server_id, "Server not connected")
-        
-        server = self._servers[server_id]
-        request_timeout = timeout or server.timeout
-        
-        # Create JSON-RPC request
-        request = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": method,
-            "params": params or {}
-        }
-        
-        try:
-            if server.transport == TransportType.STDIO:
-                return await self._send_stdio_request(connection, request, request_timeout)
-            elif server.transport in (TransportType.SSE, TransportType.HTTP):
-                return await self._send_http_request(connection, request, request_timeout)
-            else:
-                raise SystemError(f"Unsupported transport: {server.transport}")
-        
-        except Exception as e:
-            connection.error_count += 1
-            connection.last_error = str(e)
-            
-            logger.error(
-                "request_failed",
-                server_id=server_id,
-                method=method,
-                error=str(e)
-            )
-            
-            raise SystemError(f"Request failed: {e}") from e
     
     async def discover_servers(self, source: str = "local") -> List[MCPServer]:
         """
@@ -733,122 +711,78 @@ class MCPServerManager(BaseManager[MCPServer]):
         
         return discovered
     
-    # Transport-specific connection methods
+    def _register_message_handlers(self) -> None:
+        """Register transport message handlers."""
+        # Register common handlers
+        self._transport_manager.on_message("ping", self._handle_ping)
+        self._transport_manager.on_message("notification", self._handle_notification)
+        self._transport_manager.on_message("tools/list", self._handle_tools_list)
+        self._transport_manager.on_message("resources/list", self._handle_resources_list)
+        self._transport_manager.on_message("prompts/list", self._handle_prompts_list)
     
-    async def _connect_stdio(self, server: MCPServer, connection: Connection) -> None:
-        """Connect using STDIO transport."""
-        if not server.command:
-            raise SystemError("STDIO transport requires command")
-        
-        # Create process
-        process = await asyncio.create_subprocess_exec(
-            server.command,
-            *server.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, **server.env}
+    async def _handle_ping(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle ping request."""
+        return {"pong": True, "timestamp": datetime.utcnow().isoformat()}
+    
+    async def _handle_notification(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle notification from server."""
+        await emit(
+            "mcp_server_notification",
+            EventCategory.MCP,
+            params
         )
-        
-        connection.process = process
-        
-        # Test connection with ping
-        await self._ping_stdio_connection(connection)
+        return {"acknowledged": True}
     
-    async def _connect_sse(self, server: MCPServer, connection: Connection) -> None:
-        """Connect using SSE transport."""
-        if not server.endpoint:
-            raise SystemError("SSE transport requires endpoint")
-        
-        # Create session
-        session = aiohttp.ClientSession()
-        connection.session = session
-        
-        # Test connection
-        async with session.get(f"{server.endpoint}/health") as resp:
-            if resp.status != 200:
-                raise SystemError(f"SSE health check failed: {resp.status}")
+    async def _handle_tools_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle tools list request."""
+        # This would be implemented based on the server's capabilities
+        return {"tools": []}
     
-    async def _connect_http(self, server: MCPServer, connection: Connection) -> None:
-        """Connect using HTTP transport."""
-        if not server.endpoint:
-            raise SystemError("HTTP transport requires endpoint")
-        
-        # Use shared session
-        connection.session = self._http_session
-        
-        # Test connection
-        async with self._http_session.get(f"{server.endpoint}/health") as resp:
-            if resp.status != 200:
-                raise SystemError(f"HTTP health check failed: {resp.status}")
+    async def _handle_resources_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle resources list request."""
+        # This would be implemented based on the server's capabilities
+        return {"resources": []}
     
-    # Request sending methods
+    async def _handle_prompts_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle prompts list request."""
+        # This would be implemented based on the server's capabilities
+        return {"prompts": []}
     
-    async def _send_stdio_request(
+    async def send_request(
         self,
-        connection: Connection,
-        request: Dict[str, Any],
-        timeout: float
+        server_id: str,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Dict[str, Any]:
-        """Send request via STDIO."""
-        if not connection.process:
-            raise SystemError("STDIO process not available")
+        """Send JSON-RPC request to MCP server."""
+        connection = self._connections.get(server_id)
+        if not connection or connection.state != ConnectionState.CONNECTED:
+            raise ValidationError("server_id", server_id, "Server not connected")
         
-        # Send request
-        request_data = json.dumps(request) + "\n"
-        connection.process.stdin.write(request_data.encode())
-        await connection.process.stdin.drain()
+        server = self._servers[server_id]
+        request_timeout = timeout or server.timeout
         
-        # Read response
         try:
-            response_line = await asyncio.wait_for(
-                connection.process.stdout.readline(),
-                timeout=timeout
+            # Use transport manager to send request
+            return await self._transport_manager.request(
+                method=method,
+                params=params,
+                transport=connection.transport_name,
+                timeout=request_timeout
+            )
+        except Exception as e:
+            connection.error_count += 1
+            connection.last_error = str(e)
+            
+            logger.error(
+                "request_failed",
+                server_id=server_id,
+                method=method,
+                error=str(e)
             )
             
-            if not response_line:
-                raise SystemError("No response from server")
-            
-            response = json.loads(response_line.decode().strip())
-            
-            if "error" in response:
-                raise SystemError(f"Server error: {response['error']}")
-            
-            return response.get("result", {})
-            
-        except asyncio.TimeoutError:
-            raise SystemError(f"Request timeout after {timeout}s")
-    
-    async def _send_http_request(
-        self,
-        connection: Connection,
-        request: Dict[str, Any],
-        timeout: float
-    ) -> Dict[str, Any]:
-        """Send request via HTTP."""
-        if not connection.session:
-            raise SystemError("HTTP session not available")
-        
-        server = self._servers[connection.server_id]
-        
-        try:
-            async with connection.session.post(
-                f"{server.endpoint}/rpc",
-                json=request,
-                timeout=aiohttp.ClientTimeout(total=timeout)
-            ) as resp:
-                if resp.status != 200:
-                    raise SystemError(f"HTTP error: {resp.status}")
-                
-                response = await resp.json()
-                
-                if "error" in response:
-                    raise SystemError(f"Server error: {response['error']}")
-                
-                return response.get("result", {})
-                
-        except asyncio.TimeoutError:
-            raise SystemError(f"Request timeout after {timeout}s")
+            raise SystemError(f"Request failed: {e}") from e
     
     # Health monitoring
     
@@ -920,40 +854,15 @@ class MCPServerManager(BaseManager[MCPServer]):
     
     async def _ping_connection(self, connection: Connection) -> None:
         """Ping a connection to check health."""
-        server = self._servers[connection.server_id]
-        
-        if server.transport == TransportType.STDIO:
-            await self._ping_stdio_connection(connection)
-        else:
-            await self._ping_http_connection(connection)
-    
-    async def _ping_stdio_connection(self, connection: Connection) -> None:
-        """Ping STDIO connection."""
         try:
-            await self._send_stdio_request(
-                connection,
-                {"jsonrpc": "2.0", "id": "ping", "method": "ping"},
-                5.0
+            # Use standard ping method through transport
+            await self._transport_manager.request(
+                method="ping",
+                transport=connection.transport_name,
+                timeout=5.0
             )
         except Exception as e:
-            raise SystemError(f"STDIO ping failed: {e}") from e
-    
-    async def _ping_http_connection(self, connection: Connection) -> None:
-        """Ping HTTP connection."""
-        server = self._servers[connection.server_id]
-        
-        if not connection.session:
-            raise SystemError("HTTP session not available")
-        
-        try:
-            async with connection.session.get(
-                f"{server.endpoint}/ping",
-                timeout=aiohttp.ClientTimeout(total=5.0)
-            ) as resp:
-                if resp.status != 200:
-                    raise SystemError(f"HTTP ping failed: {resp.status}")
-        except Exception as e:
-            raise SystemError(f"HTTP ping failed: {e}") from e
+            raise SystemError(f"Ping failed: {e}") from e
     
     # Discovery methods
     

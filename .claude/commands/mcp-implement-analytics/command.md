@@ -26,7 +26,7 @@ This command coordinates the implementation of Tasks 9-10: Usage Analytics and P
 ```
 
 Workflow sequence:
-1. Telemetry Agent designs OpenTelemetry architecture
+1. Monitoring Agent designs OpenTelemetry architecture
 2. Analytics Agent implements metrics collection
 3. Storage Agent creates analytics database
 4. Performance Agent adds monitoring

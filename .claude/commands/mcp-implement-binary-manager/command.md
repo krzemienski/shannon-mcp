@@ -27,7 +27,7 @@ This command coordinates the implementation of Task 3: Binary Manager, which is 
 
 Initiates the Binary Manager implementation workflow:
 1. Architecture Agent designs the component
-2. SDK Expert implements discovery logic
+2. Claude SDK Expert implements discovery logic
 3. Platform Compatibility ensures cross-platform support
 4. Testing Agent creates comprehensive tests
 5. Security Agent validates implementation
