@@ -41,9 +41,7 @@ isort = "^5.13.0"
 pre-commit = "^3.3.0"
 
 [tool.poetry.scripts]
-shannon-mcp = "shannon_mcp.server:main"
-shannon-mcp-fastmcp = "shannon_mcp.stdio_wrapper:main"
-shannon-mcp-production = "shannon_mcp.server_fastmcp_production:main"
+shannon-mcp = "shannon_mcp.stdio_wrapper:main"
 
 [build-system]
 requires = ["poetry-core"]

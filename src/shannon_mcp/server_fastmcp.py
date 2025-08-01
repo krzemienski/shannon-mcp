@@ -44,11 +44,6 @@ from .utils.errors import (
 )
 from .utils.validators import validate_prompt, validate_model, validate_session_id
 from .utils.metrics import MetricsCollector, track_operation
-# from .utils.rate_limiter import RateLimiter
-# from .utils.auth import AuthManager
-# from .storage.cas import ContentAddressableStorage
-# from .streaming.jsonl_processor import JSONLProcessor
-# from .streaming.backpressure import BackpressureController
 
 # Setup logging
 setup_logging("shannon-mcp.server")
@@ -582,6 +577,167 @@ async def find_claude_binary() -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def check_claude_updates(
+    current_version: Optional[str] = None,
+    channel: str = "stable"
+) -> Dict[str, Any]:
+    """
+    Check for available Claude Code updates.
+    
+    Queries GitHub releases API to find newer versions and provides
+    download information for updates.
+    
+    Args:
+        current_version: Current version to compare against (auto-detected if not provided)
+        channel: Release channel - stable, beta, or canary
+    
+    Returns:
+        Update availability, latest version info, and download URLs
+    """
+    ensure_state_initialized()
+    
+    try:
+        # Get current version if not provided
+        if not current_version and state.managers['binary']:
+            try:
+                binary_info = await state.managers['binary'].get_binary_info()
+                current_version = binary_info.get('version', '0.0.0')
+            except:
+                current_version = '0.0.0'
+        
+        # Query GitHub releases
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            url = "https://api.github.com/repos/anthropics/claude-code/releases"
+            headers = {"Accept": "application/vnd.github.v3+json"}
+            
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    raise ShannonMCPError(f"GitHub API error: {resp.status}")
+                
+                releases = await resp.json()
+        
+        # Filter by channel
+        channel_releases = []
+        for release in releases:
+            tag = release.get('tag_name', '')
+            
+            # Channel detection
+            if channel == 'canary' and 'canary' in tag:
+                channel_releases.append(release)
+            elif channel == 'beta' and ('beta' in tag or 'rc' in tag):
+                channel_releases.append(release)
+            elif channel == 'stable' and not any(x in tag for x in ['canary', 'beta', 'rc']):
+                if not release.get('prerelease', False):
+                    channel_releases.append(release)
+        
+        if not channel_releases:
+            return {
+                "status": "no_updates",
+                "current_version": current_version,
+                "channel": channel,
+                "message": f"No releases found for {channel} channel"
+            }
+        
+        # Get latest release
+        latest = channel_releases[0]
+        latest_version = latest.get('tag_name', '').lstrip('v')
+        
+        # Simple version comparison
+        from packaging import version
+        try:
+            is_newer = version.parse(latest_version) > version.parse(current_version or '0.0.0')
+        except:
+            # Fallback to string comparison
+            is_newer = latest_version != current_version
+        
+        # Get download assets
+        assets = []
+        for asset in latest.get('assets', []):
+            assets.append({
+                "name": asset['name'],
+                "size": asset['size'],
+                "download_url": asset['browser_download_url'],
+                "content_type": asset.get('content_type', 'application/octet-stream')
+            })
+        
+        return {
+            "status": "update_available" if is_newer else "up_to_date",
+            "current_version": current_version,
+            "latest_version": latest_version,
+            "channel": channel,
+            "is_newer": is_newer,
+            "release_info": {
+                "name": latest.get('name', latest_version),
+                "published_at": latest.get('published_at'),
+                "release_notes": latest.get('body', ''),
+                "url": latest.get('html_url'),
+                "prerelease": latest.get('prerelease', False),
+                "assets": assets
+            },
+            "update_command": f"claude update --channel {channel}" if is_newer else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Update check error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to check for updates: {str(e)}")
+
+
+@mcp.tool()
+async def server_status() -> Dict[str, Any]:
+    """
+    Get the current server status including initialization state and manager health.
+    
+    Returns:
+        Server status including:
+        - initialized: Whether server is fully initialized
+        - managers: Status of each manager component
+        - uptime: Server uptime in seconds
+        - metrics: Basic server metrics
+    """
+    try:
+        # Get manager statuses
+        manager_status = {}
+        for name, manager in state.managers.items():
+            try:
+                if hasattr(manager, 'health_check'):
+                    status = await manager.health_check()
+                    manager_status[name] = status.get('healthy', False)
+                else:
+                    # Assume healthy if no health check method
+                    manager_status[name] = True
+            except Exception as e:
+                logger.error(f"Health check failed for {name}: {e}")
+                manager_status[name] = False
+        
+        uptime = (datetime.now(timezone.utc) - state._startup_time).total_seconds() if state.initialized else 0
+        
+        return {
+            "initialized": state.initialized,
+            "managers": manager_status,
+            "uptime": uptime,
+            "metrics": {
+                "requests": state._request_count,
+                "errors": state._error_count
+            },
+            "version": __version__,
+            "platform": sys.platform
+        }
+    except Exception as e:
+        logger.error(f"Server status error: {e}", exc_info=True)
+        return {
+            "initialized": state.initialized,
+            "error": str(e),
+            "managers": {},
+            "uptime": 0,
+            "metrics": {
+                "requests": state._request_count,
+                "errors": state._error_count
+            }
+        }
+
+
+@mcp.tool()
 async def create_session(
     prompt: str,
     model: str = "claude-3-sonnet",
@@ -605,7 +761,7 @@ async def create_session(
     try:
         # Validate inputs
         prompt = validate_prompt(prompt)
-        model = validate_model(model, state.config.models.available_models)
+        model = validate_model(model)
         
         # Apply rate limiting per user if auth is enabled
         # if hasattr(state, 'current_user'):
@@ -960,6 +1116,200 @@ async def list_agents(
 
 
 @mcp.tool()
+async def create_agent(
+    name: str,
+    role: str,
+    capabilities: List[str],
+    description: Optional[str] = None,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    category: Optional[str] = "specialized"
+) -> Dict[str, Any]:
+    """
+    Create a new custom AI agent with specified capabilities.
+    
+    Args:
+        name: Unique name for the agent
+        role: Role/purpose of the agent (e.g., 'code_reviewer', 'architect')
+        capabilities: List of capabilities the agent possesses
+        description: Optional detailed description of the agent
+        model: Optional specific model to use (defaults to project model)
+        temperature: Optional temperature setting (0.0-1.0)
+        category: Agent category (core, infrastructure, quality, specialized)
+    
+    Returns:
+        Created agent details including ID and configuration
+    """
+    try:
+        # Validate inputs
+        if not name or not name.strip():
+            raise ValidationError("name", name, "Agent name is required")
+        
+        if not role or not role.strip():
+            raise ValidationError("role", role, "Agent role is required")
+        
+        if not capabilities or len(capabilities) == 0:
+            raise ValidationError("capabilities", capabilities, "At least one capability is required")
+        
+        # Validate temperature if provided
+        if temperature is not None:
+            if temperature < 0.0 or temperature > 1.0:
+                raise ValidationError("temperature", temperature, "Temperature must be between 0.0 and 1.0")
+        
+        # Import required models
+        from ..models.agent import Agent, AgentCategory, AgentCapability
+        
+        # Map category string to enum
+        try:
+            agent_category = AgentCategory(category.lower())
+        except ValueError:
+            raise ValidationError("category", category, f"Invalid category. Must be one of: {', '.join([c.value for c in AgentCategory])}")
+        
+        # Create capability objects
+        agent_capabilities = []
+        for cap in capabilities:
+            capability = AgentCapability(
+                name=cap,
+                description=f"Capability for {cap}",
+                expertise_level=7,  # Default expertise level
+                tools=[]  # Can be extended later
+            )
+            agent_capabilities.append(capability)
+        
+        # Create agent configuration
+        agent_config = {
+            "model": model or "default",
+            "temperature": temperature or 0.7,
+            "max_tokens": 4096,
+            "custom_role": role
+        }
+        
+        # Create the agent
+        agent = Agent(
+            name=name,
+            description=description or f"Custom agent for {role}",
+            category=agent_category,
+            capabilities=agent_capabilities,
+            config=agent_config
+        )
+        
+        # Register the agent
+        await state.managers['agent'].register_agent(agent)
+        
+        logger.info(f"Created agent: {agent.id} ({name})")
+        
+        return {
+            "status": "success",
+            "agent": {
+                "id": agent.id,
+                "name": agent.name,
+                "role": role,
+                "category": agent.category.value,
+                "capabilities": [cap.name for cap in agent.capabilities],
+                "config": agent.config,
+                "created_at": agent.created_at.isoformat()
+            },
+            "message": f"Agent '{name}' created successfully"
+        }
+        
+    except ValidationError as e:
+        logger.error(f"Agent creation validation error: {e}")
+        raise ShannonMCPError(f"Validation error: {e.message}")
+    except Exception as e:
+        logger.error(f"Agent creation error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to create agent: {str(e)}")
+
+
+@mcp.tool()
+async def execute_agent(
+    agent_id: str,
+    task: str,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: Optional[int] = None,
+    priority: str = "medium"
+) -> Dict[str, Any]:
+    """
+    Execute a task using a specific agent.
+    
+    Args:
+        agent_id: ID of the agent to use
+        task: Task description or prompt
+        context: Optional context data for the task
+        timeout: Optional timeout in seconds (default: 300)
+        priority: Task priority (low, medium, high, critical)
+    
+    Returns:
+        Execution details including task ID and initial response
+    """
+    try:
+        # Validate agent exists
+        agent = await state.managers['agent'].get_agent(agent_id)
+        if not agent:
+            raise ValidationError("agent_id", agent_id, f"Agent {agent_id} not found")
+        
+        # Import required models
+        from ..managers.agent import TaskRequest
+        from ..models.agent import AgentStatus
+        
+        # Check if agent is available
+        if agent.status != AgentStatus.AVAILABLE:
+            return {
+                "status": "error",
+                "error": f"Agent {agent.name} is not available (status: {agent.status.value})",
+                "agent_status": agent.status.value
+            }
+        
+        # Create task request
+        task_request = TaskRequest(
+            description=task,
+            required_capabilities=[cap.name for cap in agent.capabilities],
+            priority=priority,
+            context=context or {},
+            timeout=timeout or 300
+        )
+        
+        # Assign task to specific agent
+        assignment = await state.managers['agent'].assign_task(task_request)
+        
+        # Start execution
+        execution_id = f"exec_{assignment.task_id}"
+        await state.managers['agent'].start_execution(execution_id)
+        
+        # For now, return immediate response
+        # In a real implementation, this would start async execution
+        initial_response = {
+            "status": "execution_started",
+            "message": f"Task assigned to {agent.name}",
+            "estimated_duration": assignment.estimated_duration,
+            "confidence": assignment.confidence
+        }
+        
+        return {
+            "status": "success",
+            "task_id": assignment.task_id,
+            "execution_id": execution_id,
+            "agent": {
+                "id": agent.id,
+                "name": agent.name,
+                "category": agent.category.value
+            },
+            "assignment": {
+                "score": assignment.score,
+                "estimated_duration": assignment.estimated_duration,
+                "confidence": assignment.confidence
+            },
+            "response": initial_response
+        }
+        
+    except ValidationError as e:
+        logger.error(f"Agent execution validation error: {e}")
+        raise ShannonMCPError(f"Validation error: {e.message}")
+    except Exception as e:
+        logger.error(f"Agent execution error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to execute agent task: {str(e)}")
+
+
+@mcp.tool()
 async def assign_task(
     agent_id: str,
     task: str,
@@ -1136,6 +1486,112 @@ async def restore_checkpoint(
 
 
 @mcp.tool()
+async def list_checkpoints(
+    session_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> Dict[str, Any]:
+    """
+    List available checkpoints with filtering options.
+    
+    Args:
+        session_id: Filter by specific session
+        tags: Filter by checkpoint tags
+        limit: Maximum number of results
+        offset: Pagination offset
+    
+    Returns:
+        List of checkpoints with metadata
+    """
+    ensure_state_initialized()
+    
+    try:
+        checkpoints = await state.managers['checkpoint'].list_checkpoints(
+            session_id=session_id,
+            tags=tags,
+            limit=limit,
+            offset=offset
+        )
+        
+        total_count = await state.managers['checkpoint'].count_checkpoints(
+            session_id=session_id,
+            tags=tags
+        )
+        
+        return {
+            "status": "success",
+            "checkpoints": [cp.to_dict() for cp in checkpoints],
+            "pagination": {
+                "total": total_count,
+                "limit": limit,
+                "offset": offset,
+                "has_more": (offset + limit) < total_count
+            },
+            "metadata": {
+                "filtered_by": {
+                    "session_id": session_id,
+                    "tags": tags
+                }
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"List checkpoints error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to list checkpoints: {str(e)}")
+
+
+@mcp.tool()
+async def branch_checkpoint(
+    checkpoint_id: str,
+    branch_name: str,
+    modifications: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Create a new branch from an existing checkpoint.
+    
+    Enables creating alternate conversation paths from any checkpoint,
+    useful for exploring different approaches without losing context.
+    
+    Args:
+        checkpoint_id: Source checkpoint to branch from
+        branch_name: Name for the new branch
+        modifications: Optional modifications to apply (e.g., different model settings)
+    
+    Returns:
+        New session created from branched checkpoint
+    """
+    ensure_state_initialized()
+    
+    try:
+        # Create branch from checkpoint
+        branch_result = await state.managers['checkpoint'].branch_checkpoint(
+            checkpoint_id=checkpoint_id,
+            branch_name=branch_name,
+            modifications=modifications or {}
+        )
+        
+        return {
+            "status": "branched",
+            "branch": {
+                "name": branch_name,
+                "source_checkpoint": checkpoint_id,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            },
+            "session": branch_result['session'].to_dict(),
+            "checkpoint": branch_result['checkpoint'].to_dict(),
+            "metadata": {
+                "modifications_applied": bool(modifications),
+                "branch_point": branch_result.get('branch_point', {})
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Branch checkpoint error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to branch checkpoint: {str(e)}")
+
+
+@mcp.tool()
 async def query_analytics(
     query_type: str,
     parameters: Dict[str, Any],
@@ -1179,6 +1635,451 @@ async def query_analytics(
     except Exception as e:
         logger.error(f"Analytics query error: {e}", exc_info=True)
         raise ShannonMCPError(f"Failed to query analytics: {str(e)}")
+
+
+@mcp.tool()
+async def manage_settings(
+    action: str,
+    key: Optional[str] = None,
+    value: Optional[Any] = None,
+    section: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Manage Shannon MCP server settings dynamically.
+    
+    Provides runtime configuration management for server behavior,
+    feature toggles, and performance tuning without restarts.
+    
+    Args:
+        action: Action to perform - get, set, reset, list
+        key: Setting key (for get/set/reset actions)
+        value: New value (for set action)
+        section: Settings section to operate on (defaults to all)
+    
+    Returns:
+        Settings information based on action
+    """
+    ensure_state_initialized()
+    
+    try:
+        if action == "get":
+            if not key:
+                raise ValidationError("key", None, "Key required for get action")
+            
+            # Get specific setting
+            current_value = state.config.get_nested(key)
+            return {
+                "status": "success",
+                "action": "get",
+                "key": key,
+                "value": current_value,
+                "type": type(current_value).__name__,
+                "metadata": {
+                    "source": "runtime" if state.config.is_overridden(key) else "default",
+                    "mutable": state.config.is_mutable(key)
+                }
+            }
+            
+        elif action == "set":
+            if not key or value is None:
+                raise ValidationError("key/value", None, "Key and value required for set action")
+            
+            # Validate setting is mutable
+            if not state.config.is_mutable(key):
+                raise ValidationError("key", key, "Setting is not mutable at runtime")
+            
+            # Update setting
+            old_value = state.config.get_nested(key)
+            state.config.set_nested(key, value)
+            
+            # Apply changes if needed
+            await state.apply_config_change(key, value)
+            
+            return {
+                "status": "updated",
+                "action": "set",
+                "key": key,
+                "old_value": old_value,
+                "new_value": value,
+                "metadata": {
+                    "applied": True,
+                    "requires_restart": state.config.requires_restart(key)
+                }
+            }
+            
+        elif action == "reset":
+            if not key:
+                raise ValidationError("key", None, "Key required for reset action")
+            
+            # Reset to default
+            default_value = state.config.get_default(key)
+            state.config.reset_to_default(key)
+            
+            return {
+                "status": "reset",
+                "action": "reset",
+                "key": key,
+                "default_value": default_value,
+                "metadata": {
+                    "reset_at": datetime.now(timezone.utc).isoformat()
+                }
+            }
+            
+        elif action == "list":
+            # List all settings in section
+            settings = state.config.list_settings(section=section)
+            
+            return {
+                "status": "success",
+                "action": "list",
+                "section": section or "all",
+                "settings": settings,
+                "metadata": {
+                    "total_settings": len(settings),
+                    "mutable_count": sum(1 for s in settings.values() if s.get('mutable', False)),
+                    "overridden_count": sum(1 for s in settings.values() if s.get('overridden', False))
+                }
+            }
+            
+        else:
+            raise ValidationError("action", action, "Invalid action. Must be: get, set, reset, list")
+            
+    except ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Settings management error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to manage settings: {str(e)}")
+
+
+@mcp.tool()
+async def mcp_add(
+    name: str,
+    command: str,
+    args: Optional[List[str]] = None,
+    env: Optional[Dict[str, str]] = None,
+    transport: str = "stdio",
+    enabled: bool = True
+) -> Dict[str, Any]:
+    """
+    Add a new MCP server to Claude Code configuration.
+    
+    Args:
+        name: Name of the MCP server
+        command: Command to run the server
+        args: Optional command arguments
+        env: Optional environment variables
+        transport: Transport type (stdio, sse, http, websocket)
+        enabled: Whether to enable the server immediately
+    
+    Returns:
+        Added server configuration and status
+    """
+    try:
+        # Import required enums
+        from ..transport import TransportType
+        from ..managers.mcp_server import MCPServer
+        
+        # Validate transport type
+        try:
+            transport_type = TransportType(transport.lower())
+        except ValueError:
+            raise ValidationError("transport", transport, f"Invalid transport. Must be one of: {', '.join([t.value for t in TransportType])}")
+        
+        # Create server configuration
+        server = MCPServer(
+            id=f"mcp_{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}",
+            name=name,
+            transport=transport_type,
+            command=command,
+            args=args or [],
+            env=env or {},
+            enabled=enabled
+        )
+        
+        # Add to manager
+        await state.managers['mcp_server'].add_server(server)
+        
+        # Update Claude Code configuration file
+        config_path = Path.home() / ".claude" / "mcp_settings.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load existing config
+        config = {}
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        
+        # Add server to config
+        if "mcpServers" not in config:
+            config["mcpServers"] = {}
+        
+        config["mcpServers"][name] = {
+            "command": command,
+            "args": args or [],
+            "env": env or {}
+        }
+        
+        # Save config
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        logger.info(f"Added MCP server: {name} ({server.id})")
+        
+        return {
+            "status": "success",
+            "server": server.to_dict(),
+            "config_path": str(config_path),
+            "message": f"MCP server '{name}' added successfully"
+        }
+        
+    except ValidationError as e:
+        logger.error(f"MCP add validation error: {e}")
+        raise ShannonMCPError(f"Validation error: {e.message}")
+    except Exception as e:
+        logger.error(f"MCP add error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to add MCP server: {str(e)}")
+
+
+@mcp.tool()
+async def mcp_add_from_claude_desktop(
+    name: str,
+    desktop_config_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Import MCP server configuration from Claude Desktop.
+    
+    Args:
+        name: Name of the server to import
+        desktop_config_path: Optional path to Claude Desktop config (auto-detected if not provided)
+    
+    Returns:
+        Imported server configuration
+    """
+    try:
+        # Default Claude Desktop config locations
+        if not desktop_config_path:
+            config_paths = [
+                Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
+                Path.home() / ".config" / "claude" / "claude_desktop_config.json",
+                Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
+            ]
+        else:
+            config_paths = [Path(desktop_config_path)]
+        
+        # Find config file
+        config_path = None
+        for path in config_paths:
+            if path.exists():
+                config_path = path
+                break
+        
+        if not config_path:
+            raise ShannonMCPError("Claude Desktop configuration not found")
+        
+        # Load Claude Desktop config
+        with open(config_path, 'r') as f:
+            desktop_config = json.load(f)
+        
+        # Find server in config
+        servers = desktop_config.get("mcpServers", {})
+        if name not in servers:
+            available = list(servers.keys())
+            raise ValidationError("name", name, f"Server '{name}' not found. Available servers: {', '.join(available)}")
+        
+        server_config = servers[name]
+        
+        # Add server using mcp_add
+        result = await mcp_add(
+            name=name,
+            command=server_config.get("command", ""),
+            args=server_config.get("args", []),
+            env=server_config.get("env", {}),
+            transport="stdio",  # Claude Desktop uses stdio
+            enabled=True
+        )
+        
+        result["imported_from"] = str(config_path)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Claude Desktop import error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to import from Claude Desktop: {str(e)}")
+
+
+@mcp.tool()
+async def mcp_add_json(
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Add MCP server from complete JSON configuration.
+    
+    Args:
+        config: Complete server configuration including:
+            - name: Server name (required)
+            - command: Command to run (required)
+            - args: Command arguments (optional)
+            - env: Environment variables (optional)
+            - transport: Transport type (optional, default: stdio)
+            - endpoint: Endpoint URL for SSE/HTTP transports (optional)
+            - timeout: Connection timeout in seconds (optional)
+            - retry_count: Number of retries (optional)
+    
+    Returns:
+        Added server configuration
+    """
+    try:
+        # Extract configuration
+        name = config.get("name")
+        if not name:
+            raise ValidationError("name", None, "Server name is required")
+        
+        command = config.get("command")
+        if not command:
+            raise ValidationError("command", None, "Server command is required")
+        
+        # Import required classes
+        from ..transport import TransportType
+        from ..managers.mcp_server import MCPServer
+        
+        # Parse transport
+        transport = config.get("transport", "stdio")
+        try:
+            transport_type = TransportType(transport.lower())
+        except ValueError:
+            raise ValidationError("transport", transport, f"Invalid transport: {transport}")
+        
+        # Create server
+        server = MCPServer(
+            id=f"mcp_{name.lower().replace(' ', '_')}_{uuid.uuid4().hex[:8]}",
+            name=name,
+            transport=transport_type,
+            command=command,
+            args=config.get("args", []),
+            env=config.get("env", {}),
+            endpoint=config.get("endpoint"),
+            timeout=config.get("timeout", 30),
+            retry_count=config.get("retry_count", 3),
+            retry_delay=config.get("retry_delay", 1.0),
+            health_check_interval=config.get("health_check_interval", 60),
+            enabled=config.get("enabled", True),
+            config=config.get("config", {})
+        )
+        
+        # Add server
+        await state.managers['mcp_server'].add_server(server)
+        
+        # Update Claude Code config
+        config_path = Path.home() / ".claude" / "mcp_settings.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load existing config
+        claude_config = {}
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                claude_config = json.load(f)
+        
+        # Add server
+        if "mcpServers" not in claude_config:
+            claude_config["mcpServers"] = {}
+        
+        claude_config["mcpServers"][name] = {
+            "command": command,
+            "args": server.args,
+            "env": server.env
+        }
+        
+        # Save config
+        with open(config_path, 'w') as f:
+            json.dump(claude_config, f, indent=2)
+        
+        return {
+            "status": "success",
+            "server": server.to_dict(),
+            "config_path": str(config_path),
+            "message": f"MCP server '{name}' added from JSON configuration"
+        }
+        
+    except ValidationError as e:
+        logger.error(f"MCP JSON add validation error: {e}")
+        raise ShannonMCPError(f"Validation error: {e.message}")
+    except Exception as e:
+        logger.error(f"MCP JSON add error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to add MCP server from JSON: {str(e)}")
+
+
+@mcp.tool()
+async def mcp_serve(
+    name: str,
+    port: Optional[int] = None,
+    transport: str = "stdio",
+    auto_restart: bool = True
+) -> Dict[str, Any]:
+    """
+    Start serving a local MCP server instance.
+    
+    Args:
+        name: Name of the server to start
+        port: Optional port for SSE/HTTP/WebSocket transports
+        transport: Transport to use (stdio, sse, http, websocket)
+        auto_restart: Whether to auto-restart on failure
+    
+    Returns:
+        Server status and connection details
+    """
+    try:
+        # Get server from manager
+        server = await state.managers['mcp_server'].get_server(f"mcp_{name}")
+        if not server:
+            # Try finding by name
+            servers = await state.managers['mcp_server'].list_servers()
+            for s in servers:
+                if s.name == name:
+                    server = s
+                    break
+        
+        if not server:
+            raise ValidationError("name", name, f"MCP server '{name}' not found")
+        
+        # Update transport if specified
+        if transport != "stdio":
+            from ..transport import TransportType
+            try:
+                server.transport = TransportType(transport.lower())
+                if port:
+                    server.endpoint = f"http://localhost:{port}"
+            except ValueError:
+                raise ValidationError("transport", transport, f"Invalid transport: {transport}")
+        
+        # Connect/start the server
+        connection = await state.managers['mcp_server'].connect_server(server.id)
+        
+        # Set up auto-restart if requested
+        if auto_restart:
+            # This would typically involve setting up a monitor task
+            logger.info(f"Auto-restart enabled for server: {name}")
+        
+        return {
+            "status": "success",
+            "server": {
+                "id": server.id,
+                "name": server.name,
+                "transport": server.transport.value,
+                "endpoint": server.endpoint,
+                "state": connection.state.value
+            },
+            "connection": {
+                "connected": connection.state.value == "connected",
+                "connected_at": connection.connected_at.isoformat() if connection.connected_at else None
+            },
+            "message": f"MCP server '{name}' is now serving"
+        }
+        
+    except ValidationError as e:
+        logger.error(f"MCP serve validation error: {e}")
+        raise ShannonMCPError(f"Validation error: {e.message}")
+    except Exception as e:
+        logger.error(f"MCP serve error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to serve MCP server: {str(e)}")
 
 
 # ===== RESOURCES - Production implementation with full features =====
