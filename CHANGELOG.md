@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive Project Management system for organizing multiple sessions
+  - Create, list, update, and archive projects
+  - Group related sessions within projects
+  - Project-level defaults (model, context) inherited by sessions
+  - Bulk operations on all sessions in a project
+  - Project cloning functionality
+  - Project checkpoints for versioning entire projects
+  - 9 new MCP tools for project management
+  - New MCP resources for project access (`shannon://projects`, `shannon://projects/{id}`)
+  - ProjectManager component with full CRUD operations
+- Functional test coverage for project management features (tests 5-8, 11, 15, 20)
+- PROJECT_MANAGEMENT.md documentation
 - Comprehensive API documentation in `docs/API.md`
 - Detailed architecture documentation in `docs/ARCHITECTURE.md`
 - iOS client application with Swift Package Manager support
@@ -15,7 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration test framework in `tests/mcp-integration/`
 
 ### Changed
+- **BREAKING**: Migrated build system from Poetry to uv for faster dependency management
+  - Updated pyproject.toml to use PEP 621 format
+  - Updated all documentation with uv commands
+  - Updated Dockerfile to use uv
+  - Removed poetry.lock file
 - **BREAKING**: Migrated from custom MCP implementation to FastMCP framework
+- Enhanced session creation to support optional `project_id` parameter
+- Sessions now track their parent project relationship
 - Consolidated multiple server implementations into single `server_fastmcp.py`
 - Restructured project to follow FastMCP best practices
 - Updated all managers to use on-demand initialization pattern
@@ -27,8 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Duplicate iOS project directories
 - Temporary worktree directories
 - Obsolete documentation and report files
+- poetry.lock file (replaced by uv)
 
 ### Fixed
+- Fixed Pydantic V1 deprecation warnings by migrating to V2 validators
+  - Updated @validator to @field_validator
+  - Updated Config class to ConfigDict
+  - Added @classmethod decorators to validators
+- Fixed JSON serialization errors in logging system
+  - Added type checking before serialization
+  - Convert non-serializable objects to strings
+- Fixed double initialization error in server startup
+  - Removed duplicate initialization in on_startup handler
+  - Initialization now handled solely by lifespan context manager
 - Circular initialization dependency causing server hangs
 - Subprocess timeout issues in BinaryManager
 - JSON-RPC parameter validation errors

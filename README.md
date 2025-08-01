@@ -21,6 +21,7 @@ A high-performance Model Context Protocol (MCP) server for Claude Code CLI, buil
 Shannon MCP provides comprehensive programmatic access to Claude Code CLI operations through the MCP protocol, offering:
 
 - **🔍 Binary Discovery**: Automatic detection and validation of Claude Code installations
+- **📁 Project Management**: Organize multiple sessions within projects for better workflow
 - **🎯 Session Management**: Full lifecycle management with real-time JSONL streaming
 - **🤖 AI Agent System**: 26 specialized agents for different development tasks
 - **💾 Checkpoint System**: Git-like versioning for session state management
@@ -48,6 +49,7 @@ Shannon MCP provides comprehensive programmatic access to Claude Code CLI operat
 ├─────────────────────────────┤
 │  Core Components:           │
 │  ├── Binary Manager         │
+│  ├── Project Manager        │
 │  ├── Session Manager        │
 │  ├── Agent Manager          │
 │  ├── Checkpoint System      │
@@ -77,6 +79,12 @@ Shannon MCP provides comprehensive programmatic access to Claude Code CLI operat
 - **Capability checking**: Ensures required features are available
 - **Cache management**: Speeds up repeated binary lookups
 
+#### Project Manager
+- **Project organization**: Group related sessions together
+- **Shared context**: Project-wide settings and defaults
+- **Bulk operations**: Manage multiple sessions efficiently
+- **Progress tracking**: Aggregate metrics at project level
+
 #### Session Manager
 - **Process lifecycle**: Spawns and manages Claude Code processes
 - **JSONL streaming**: Real-time bidirectional communication
@@ -95,23 +103,27 @@ Shannon MCP provides comprehensive programmatic access to Claude Code CLI operat
 
 - Python 3.11 or higher
 - Claude Code CLI (install from [claude.ai/code](https://claude.ai/code))
-- Poetry (recommended) or pip for dependency management
+- uv (recommended) or pip for dependency management
 
 ### Installation Steps
 
 ```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Or use pip: pip install uv
+
 # Clone the repository
 git clone https://github.com/yourusername/shannon-mcp.git
 cd shannon-mcp
 
-# Install with Poetry (recommended)
-poetry install
+# Install with uv (recommended)
+uv sync
 
 # Or install with pip
 pip install -e .
 
 # Verify installation
-poetry run shannon-mcp --version
+uv run shannon-mcp --version
 ```
 
 ### Claude Desktop Integration
@@ -125,7 +137,7 @@ Add Shannon MCP to your Claude Desktop configuration:
 ```json
 {
   "shannon-mcp": {
-    "command": "poetry",
+    "command": "uv",
     "args": ["run", "shannon-mcp"],
     "cwd": "/absolute/path/to/shannon-mcp",
     "env": {
@@ -149,11 +161,11 @@ Alternative configurations:
 }
 ```
 
-**Using venv:**
+**Using uv's managed venv:**
 ```json
 {
   "shannon-mcp": {
-    "command": "/path/to/shannon-mcp/venv/bin/python",
+    "command": "/path/to/shannon-mcp/.venv/bin/python",
     "args": ["-m", "shannon_mcp.stdio_wrapper"],
     "cwd": "/absolute/path/to/shannon-mcp"
   }
@@ -239,7 +251,7 @@ Create `~/.shannon-mcp/config.json` for persistent configuration:
 
 ## Available Tools
 
-Shannon MCP provides 21 comprehensive tools for Claude Code interaction:
+Shannon MCP provides 30+ comprehensive tools for Claude Code interaction:
 
 ### Core Tools
 
@@ -267,12 +279,35 @@ result = await mcp_client.call_tool("find_claude_binary")
 claude_path = result["path"]
 ```
 
-#### 2. `create_session`
+#### 2. `create_project`
+Creates a new project to organize multiple sessions.
+
+**Parameters:**
+- `name` (string, required): Project name
+- `description` (string, optional): Project description
+- `tags` (array, optional): Tags for categorization
+- `default_model` (string, optional): Default model for sessions
+- `default_context` (object, optional): Shared context for sessions
+
+**Returns:**
+```json
+{
+  "project": {
+    "id": "proj_abc123",
+    "name": "E-commerce Platform",
+    "status": "active",
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+#### 3. `create_session`
 Creates a new Claude Code session with advanced options.
 
 **Parameters:**
 - `prompt` (string, required): Initial prompt or task description
 - `model` (string, optional): Model to use (default: "claude-3-sonnet")
+- `project_id` (string, optional): Project to add session to
 - `temperature` (float, optional): Creativity setting 0-1 (default: 0.7)
 - `max_tokens` (int, optional): Maximum response tokens
 - `context` (object, optional): Additional context data
@@ -293,9 +328,16 @@ Creates a new Claude Code session with advanced options.
 
 **Example Usage:**
 ```python
-# Create session with context
+# Create project first
+project = await mcp_client.call_tool("create_project", {
+    "name": "REST API Project",
+    "tags": ["api", "backend"]
+})
+
+# Create session within project
 session = await mcp_client.call_tool("create_session", {
     "prompt": "Build a REST API with authentication",
+    "project_id": project["project"]["id"],
     "model": "claude-3-opus",
     "context": {
         "framework": "fastapi",
@@ -306,7 +348,7 @@ session = await mcp_client.call_tool("create_session", {
 })
 ```
 
-#### 3. `send_message`
+#### 4. `send_message`
 Sends a message to an active session with streaming support.
 
 **Parameters:**
@@ -327,7 +369,27 @@ Sends a message to an active session with streaming support.
 }
 ```
 
-#### 4. `stream_session_output`
+#### 5. `list_projects`
+Lists projects with filtering and pagination.
+
+**Parameters:**
+- `status` (string, optional): Filter by status (active/archived/completed)
+- `tags` (array, optional): Filter by tags
+- `limit` (int, optional): Max results (default: 50)
+- `sort_by` (string, optional): Sort field (created_at/updated_at/name)
+
+**Returns:** List of projects with pagination info
+
+#### 6. `get_project_sessions`
+Gets all sessions within a project.
+
+**Parameters:**
+- `project_id` (string, required): Project ID
+- `include_archived` (boolean, optional): Include archived sessions
+
+**Returns:** List of sessions in the project
+
+#### 7. `stream_session_output`
 Streams real-time output from a Claude Code session.
 
 **Parameters:**
@@ -337,7 +399,7 @@ Streams real-time output from a Claude Code session.
 
 **Returns:** Streaming response with chunks
 
-#### 5. `cancel_session`
+#### 8. `cancel_session`
 Gracefully cancels an active session.
 
 **Parameters:**
@@ -355,7 +417,7 @@ Gracefully cancels an active session.
 }
 ```
 
-#### 6. `list_sessions`
+#### 9. `list_sessions`
 Lists Claude Code sessions with filtering and pagination.
 
 **Parameters:**
@@ -384,7 +446,7 @@ Lists Claude Code sessions with filtering and pagination.
 }
 ```
 
-#### 7. `get_session_details`
+#### 10. `get_session_details`
 Retrieves comprehensive session information.
 
 **Parameters:**
@@ -627,6 +689,7 @@ Shannon MCP exposes various resources for monitoring and configuration:
     "binary_path": "/usr/local/bin/claude",
     "database_path": "~/.shannon-mcp/shannon.db",
     "features": {
+      "projects": true,
       "agents": true,
       "checkpoints": true,
       "analytics": true,
@@ -635,6 +698,7 @@ Shannon MCP exposes various resources for monitoring and configuration:
   }
   ```
 
+- **`shannon://projects`** - List of all projects
 - **`shannon://agents`** - Available agents catalog
 - **`shannon://sessions`** - Active sessions list
 - **`shannon://analytics`** - Analytics dashboard data
@@ -643,6 +707,7 @@ Shannon MCP exposes various resources for monitoring and configuration:
 
 ### Dynamic Resources
 
+- **`shannon://projects/{project_id}`** - Project details with sessions
 - **`shannon://sessions/{session_id}`** - Individual session details
 - **`shannon://sessions/{session_id}/messages`** - Session message history
 - **`shannon://sessions/{session_id}/stream`** - Live session stream
@@ -651,6 +716,52 @@ Shannon MCP exposes various resources for monitoring and configuration:
 - **`shannon://analytics/{metric}`** - Specific metric data
 
 ## Advanced Features
+
+### Project Management
+
+Organize your work with projects that group related sessions:
+
+```python
+# Create a project for a web application
+project = await create_project(
+    name="E-commerce Platform",
+    description="Full-stack e-commerce site with React and Node.js",
+    tags=["web", "fullstack", "production"],
+    default_model="claude-3-opus",
+    default_context={
+        "tech_stack": ["React", "Node.js", "PostgreSQL", "Redis"],
+        "coding_standards": "airbnb",
+        "target_audience": "B2C"
+    }
+)
+
+# Create sessions for different features
+auth_session = await create_session(
+    prompt="Implement JWT authentication with refresh tokens",
+    project_id=project["project"]["id"]
+    # Inherits model and context from project
+)
+
+payment_session = await create_session(
+    prompt="Integrate Stripe payment processing",
+    project_id=project["project"]["id"]
+)
+
+# Get all sessions in the project
+sessions = await get_project_sessions(
+    project_id=project["project"]["id"]
+)
+
+# Create checkpoint for entire project
+checkpoint = await create_project_checkpoint(
+    project_id=project["project"]["id"],
+    name="MVP Complete",
+    description="All core features implemented"
+)
+
+# Archive project when done
+await archive_project(project_id=project["project"]["id"])
+```
 
 ### Multi-Agent Collaboration
 
@@ -798,6 +909,7 @@ shannon-mcp/
 │   ├── managers/              # Component managers
 │   │   ├── __init__.py
 │   │   ├── binary.py          # Claude binary management
+│   │   ├── project.py         # Project management
 │   │   ├── session.py         # Session lifecycle
 │   │   ├── agent.py           # Agent orchestration
 │   │   ├── checkpoint.py      # Checkpoint system
@@ -837,59 +949,59 @@ shannon-mcp/
 
 ```bash
 # Run all tests
-poetry run pytest
+uv run pytest
 
 # Run specific test category
-poetry run pytest tests/unit/
-poetry run pytest tests/integration/
-poetry run pytest tests/functional/
+uv run pytest tests/unit/
+uv run pytest tests/integration/
+uv run pytest tests/functional/
 
 # Run with coverage
-poetry run pytest --cov=shannon_mcp --cov-report=html
+uv run pytest --cov=shannon_mcp --cov-report=html
 
 # Run specific test file
-poetry run pytest tests/unit/test_binary_manager.py
+uv run pytest tests/unit/test_binary_manager.py
 
 # Run with verbose output
-poetry run pytest -vv
+uv run pytest -vv
 
 # Run benchmarks
-poetry run python tests/benchmarks/run_benchmarks.py
+uv run python tests/benchmarks/run_benchmarks.py
 ```
 
 ### Code Quality
 
 ```bash
 # Format code with black
-poetry run black .
+uv run black .
 
 # Check formatting
-poetry run black . --check
+uv run black . --check
 
 # Run linting
-poetry run flake8
+uv run flake8
 
 # Type checking
-poetry run mypy .
+uv run mypy .
 
 # Sort imports
-poetry run isort .
+uv run isort .
 
 # Run all checks
-poetry run black . && poetry run isort . && poetry run flake8 && poetry run mypy .
+uv run black . && uv run isort . && uv run flake8 && uv run mypy .
 
 # Install pre-commit hooks
-poetry run pre-commit install
+uv run pre-commit install
 
 # Run pre-commit on all files
-poetry run pre-commit run --all-files
+uv run pre-commit run --all-files
 ```
 
 ### Building and Publishing
 
 ```bash
 # Build package
-poetry build
+uv build
 
 # Build Docker image
 docker build -t shannon-mcp:latest .
@@ -901,7 +1013,7 @@ docker run -it --rm \
   shannon-mcp:latest
 
 # Publish to PyPI (requires credentials)
-poetry publish
+uv publish
 
 # Create release
 git tag -a v0.1.0 -m "Release version 0.1.0"
@@ -935,7 +1047,7 @@ export CLAUDE_CODE_PATH="/absolute/path/to/claude"
 }
 
 # 5. Verify with tool
-poetry run shannon-mcp test find_claude_binary
+uv run shannon-mcp test find_claude_binary
 ```
 
 #### Session Timeout Issues
@@ -977,7 +1089,7 @@ chmod 755 ~/.shannon-mcp/
 chmod 644 ~/.shannon-mcp/shannon.db
 
 # 3. Run with different user
-sudo -u claude-user poetry run shannon-mcp
+sudo -u claude-user uv run shannon-mcp
 
 # 4. Change database location
 export SHANNON_DB_PATH=/tmp/shannon.db
@@ -1001,7 +1113,7 @@ export SHANNON_MAX_SESSIONS=5
 }
 
 # 3. Monitor memory usage
-poetry run shannon-mcp monitor --memory
+uv run shannon-mcp monitor --memory
 
 # 4. Use session pooling
 {
@@ -1022,7 +1134,7 @@ export SHANNON_DEBUG=true
 export SHANNON_LOG_LEVEL=DEBUG
 
 # Run with debug output
-poetry run shannon-mcp --debug
+uv run shannon-mcp --debug
 
 # Enable SQL query logging
 export SHANNON_LOG_SQL=true
@@ -1107,14 +1219,11 @@ We welcome contributions! Please follow these guidelines:
 git clone https://github.com/yourusername/shannon-mcp.git
 cd shannon-mcp
 
-# Create virtual environment
-poetry install
-
-# Install development dependencies
-poetry install --with dev
+# Install with uv including dev dependencies
+uv sync --all-extras
 
 # Install pre-commit hooks
-poetry run pre-commit install
+uv run pre-commit install
 
 # Create feature branch
 git checkout -b feature/your-feature-name

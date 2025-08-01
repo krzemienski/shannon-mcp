@@ -6,6 +6,7 @@ The Claude Code MCP (Model Context Protocol) Server is a comprehensive Python im
 
 ### Key Capabilities
 - **Binary Management**: Automatic discovery, version checking, and environment setup for Claude Code installations
+- **Project Management**: Organize multiple sessions within projects with shared context and settings
 - **Session Orchestration**: Real-time streaming execution of Claude Code with full process lifecycle management
 - **Agent System**: Custom AI agents with specialized prompts and background execution
 - **MCP Server Configuration**: Management of additional MCP servers with STDIO and SSE transports
@@ -41,12 +42,12 @@ The Claude Code MCP (Model Context Protocol) Server is a comprehensive Python im
 │  ┌─────────────────────────────────────────────────────────────┐ │
 │  │                    Manager Components                        │ │
 │  │  ┌──────────┐ ┌──────────┐ ┌───────┐ ┌────────────────┐   │ │
-│  │  │ Binary   │ │ Session  │ │ Agent │ │ MCP Server     │   │ │
+│  │  │ Binary   │ │ Project  │ │Session│ │ Agent          │   │ │
 │  │  │ Manager  │ │ Manager  │ │Manager│ │ Manager        │   │ │
 │  │  └──────────┘ └──────────┘ └───────┘ └────────────────┘   │ │
 │  │  ┌──────────┐ ┌──────────┐ ┌───────┐ ┌────────────────┐   │ │
-│  │  │Checkpoint│ │  Hooks   │ │ Slash │ │ Analytics      │   │ │
-│  │  │ Manager  │ │ Manager  │ │Command│ │ Manager        │   │ │
+│  │  │Checkpoint│ │  Hooks   │ │ MCP   │ │ Analytics      │   │ │
+│  │  │ Manager  │ │ Manager  │ │Server │ │ Manager        │   │ │
 │  │  └──────────┘ └──────────┘ └───────┘ └────────────────┘   │ │
 │  └─────────────────────────────────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────────┐ │
@@ -77,8 +78,14 @@ The Claude Code MCP (Model Context Protocol) Server is a comprehensive Python im
 ~/.claude/
 ├── settings.json              # Global settings and MCP servers
 ├── CLAUDE.md                  # System instructions
-├── projects/                  # Project-specific data
-│   └── [project-hash]/
+├── projects/                  # Project management
+│   ├── projects.json         # Project metadata
+│   └── [project-id]/        # Project-specific data
+│       ├── project.json     # Project configuration
+│       ├── sessions/        # Session references
+│       └── metadata.json    # Project metrics
+├── sessions/                  # Session data
+│   └── [session-hash]/
 │       ├── session.jsonl      # Cached session history
 │       ├── checkpoints/       # Session checkpoints
 │       │   └── [sha256]/     # Content-addressed files
@@ -179,7 +186,89 @@ class BinaryManager:
         raise VersionParseError("Could not parse version")
 ```
 
-### 2. Session Manager
+### 2. Project Manager
+
+**Purpose**: Manages projects that organize multiple sessions with shared context and settings.
+
+**Core Functionality**:
+- Project lifecycle management (create, update, archive)
+- Session organization within projects
+- Shared context and defaults inheritance
+- Bulk operations on project sessions
+- Progress tracking with aggregated metrics
+
+**Implementation Details**:
+```python
+class ProjectManager:
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self.projects: Dict[str, Project] = {}
+    
+    async def create_project(
+        self,
+        name: str,
+        description: Optional[str] = None,
+        tags: List[str] = None,
+        default_model: str = None,
+        default_context: Dict[str, Any] = None
+    ) -> Project:
+        """Create a new project."""
+        project = Project(
+            id=f"proj_{uuid.uuid4().hex[:12]}",
+            name=name,
+            description=description,
+            tags=tags or [],
+            default_model=default_model,
+            default_context=default_context or {}
+        )
+        
+        # Save to storage
+        await self._save_project(project)
+        self.projects[project.id] = project
+        
+        return project
+    
+    async def add_session_to_project(
+        self,
+        project_id: str,
+        session_id: str
+    ) -> None:
+        """Add a session to a project."""
+        project = self.projects.get(project_id)
+        if not project:
+            raise ProjectNotFoundError(f"Project {project_id} not found")
+        
+        project.session_ids.append(session_id)
+        project.total_sessions += 1
+        await self._save_project(project)
+    
+    async def create_project_checkpoint(
+        self,
+        project_id: str,
+        name: str
+    ) -> Dict[str, Any]:
+        """Create checkpoints for all sessions in a project."""
+        project = self.projects.get(project_id)
+        if not project:
+            raise ProjectNotFoundError(f"Project {project_id} not found")
+        
+        checkpoint_results = []
+        for session_id in project.session_ids:
+            # Coordinate with checkpoint manager
+            checkpoint = await self.checkpoint_manager.create_checkpoint(
+                session_id=session_id,
+                name=f"{name} - {session_id}"
+            )
+            checkpoint_results.append(checkpoint)
+        
+        return {
+            "project_id": project_id,
+            "checkpoints": checkpoint_results,
+            "timestamp": datetime.now().isoformat()
+        }
+```
+
+### 3. Session Manager
 
 **Purpose**: Orchestrates Claude Code execution with real-time streaming and process management.
 

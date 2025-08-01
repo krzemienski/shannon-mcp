@@ -30,6 +30,7 @@ from .managers.checkpoint import CheckpointManager
 from .managers.hook import HookManager
 from .managers.analytics import AnalyticsManager
 from .managers.process_registry import ProcessRegistryManager
+from .managers.project import ProjectManager, ProjectManagerConfig, Project, ProjectStatus
 from .utils.config import load_config, get_config, ShannonConfig
 from .utils.logging import setup_logging, get_logger
 from .utils.notifications import setup_notifications, notify_event
@@ -93,9 +94,12 @@ class ServerState:
     async def initialize(self):
         """Initialize all manager components with full error recovery."""
         if self.initialized:
+            logger.debug("Server already initialized, skipping")
             return
             
         logger.info("Initializing Shannon MCP Server with Fast MCP...")
+        logger.debug(f"Working directory: {os.getcwd()}")
+        logger.debug(f"Python version: {sys.version}")
         start_time = datetime.now()
         
         try:
@@ -143,6 +147,12 @@ class ServerState:
             self.managers['process_registry'] = ProcessRegistryManager(
                 process_registry_config
             )
+            # Create ProjectManagerConfig instance
+            project_manager_config = ProjectManagerConfig(
+                name="project_manager",
+                storage_path=Path.home() / ".shannon-mcp" / "projects"
+            )
+            self.managers['project'] = ProjectManager(project_manager_config)
             
             # Initialize all managers with error handling
             for name, manager in self.managers.items():
@@ -425,21 +435,17 @@ state = ServerState()
 @asynccontextmanager
 async def lifespan(app):
     """Manage server lifecycle with comprehensive error handling."""
-    # Start initialization in background to avoid blocking
-    import asyncio
-    init_task = asyncio.create_task(state.initialize())
+    # Initialize the server before yielding
+    try:
+        await state.initialize()
+        logger.info("Shannon MCP Server initialized in lifespan")
+    except Exception as e:
+        logger.error(f"Failed to initialize server: {e}", exc_info=True)
+        raise
     
     try:
         yield
     finally:
-        # Wait for initialization to complete if still running
-        if not init_task.done():
-            init_task.cancel()
-            try:
-                await init_task
-            except asyncio.CancelledError:
-                pass
-        
         await state.cleanup()
 
 
@@ -546,8 +552,11 @@ async def find_claude_binary() -> Dict[str, Any]:
     Returns:
         Binary information including path, version, capabilities, and metadata
     """
+    logger.debug("Tool called: find_claude_binary")
+    
     # Manual initialization check
     if not state.initialized:
+        logger.warning("Server not yet initialized, returning retry response")
         return {
             "status": "initializing",
             "error": "Server is still initializing",
@@ -714,6 +723,8 @@ async def server_status() -> Dict[str, Any]:
         - uptime: Server uptime in seconds
         - metrics: Basic server metrics
     """
+    logger.debug("Tool called: server_status")
+    
     try:
         # Get manager statuses
         manager_status = {}
@@ -757,9 +768,241 @@ async def server_status() -> Dict[str, Any]:
 
 
 @mcp.tool()
+async def create_project(
+    name: str,
+    description: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    default_model: Optional[str] = None,
+    default_context: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Create a new project to organize multiple sessions.
+    
+    Args:
+        name: Project name (required)
+        description: Optional project description
+        tags: Optional tags for categorization
+        default_model: Default model for sessions in this project
+        default_context: Default context for sessions
+        metadata: Additional metadata
+    
+    Returns:
+        Created project details including ID and configuration
+    """
+    logger.debug(f"Tool called: create_project with name={name}")
+    
+    if not state.initialized:
+        logger.warning("Server not yet initialized")
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].create_project(
+            name=name,
+            description=description,
+            tags=tags,
+            default_model=default_model,
+            default_context=default_context,
+            metadata=metadata
+        )
+        
+        logger.info(f"Created project: {project.id} ({project.name})")
+        
+        return {
+            "status": "success",
+            "project": project.to_dict(),
+            "message": f"Project '{name}' created successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Project creation error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to create project: {str(e)}")
+
+
+@mcp.tool()
+async def list_projects(
+    status: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "updated_at",
+    sort_order: str = "desc"
+) -> Dict[str, Any]:
+    """
+    List projects with filtering and pagination.
+    
+    Args:
+        status: Filter by status (active, archived, completed, suspended)
+        tags: Filter by tags
+        limit: Maximum number of projects to return
+        offset: Pagination offset
+        sort_by: Sort field (created_at, updated_at, name, total_sessions)
+        sort_order: Sort order (asc, desc)
+    
+    Returns:
+        List of projects with pagination info
+    """
+    logger.debug("Tool called: list_projects")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        # Parse status if provided
+        project_status = None
+        if status:
+            try:
+                project_status = ProjectStatus(status.lower())
+            except ValueError:
+                raise InvalidRequestError(f"Invalid project status: {status}")
+        
+        projects, total = await state.managers['project'].list_projects(
+            status=project_status,
+            tags=tags,
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        return {
+            "status": "success",
+            "projects": [p.to_dict() for p in projects],
+            "pagination": {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"List projects error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to list projects: {str(e)}")
+
+
+@mcp.tool()
+async def get_project(
+    project_id: str,
+    include_sessions: bool = True
+) -> Dict[str, Any]:
+    """
+    Get detailed information about a specific project.
+    
+    Args:
+        project_id: ID of the project
+        include_sessions: Whether to include session details
+    
+    Returns:
+        Project details including sessions if requested
+    """
+    logger.debug(f"Tool called: get_project with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].get_project(project_id)
+        if not project:
+            return {
+                "status": "error",
+                "error": f"Project {project_id} not found"
+            }
+        
+        result = {
+            "status": "success",
+            "project": project.to_dict()
+        }
+        
+        # Include session details if requested
+        if include_sessions and project.session_ids:
+            sessions = []
+            for session_id in project.session_ids:
+                session = await state.managers['session'].get_session(session_id)
+                if session:
+                    sessions.append(session.to_dict())
+            result["sessions"] = sessions
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Get project error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to get project: {str(e)}")
+
+
+@mcp.tool()
+async def update_project(
+    project_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    default_model: Optional[str] = None,
+    default_context: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Update project details.
+    
+    Args:
+        project_id: ID of the project to update
+        name: New project name
+        description: New description
+        tags: New tags
+        default_model: New default model
+        default_context: New default context
+        metadata: Additional metadata to update
+    
+    Returns:
+        Updated project details
+    """
+    logger.debug(f"Tool called: update_project with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].update_project(
+            project_id=project_id,
+            name=name,
+            description=description,
+            tags=tags,
+            default_model=default_model,
+            default_context=default_context,
+            metadata=metadata
+        )
+        
+        return {
+            "status": "success",
+            "project": project.to_dict(),
+            "message": "Project updated successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Update project error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to update project: {str(e)}")
+
+
+@mcp.tool()
 async def create_session(
     prompt: str,
     model: str = "claude-3-sonnet",
+    project_id: Optional[str] = None,
     checkpoint_id: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     options: Optional[Dict[str, Any]] = None
@@ -770,6 +1013,7 @@ async def create_session(
     Args:
         prompt: Initial prompt for the session (validated for length/content)
         model: Model to use (validated against available models)
+        project_id: Optional project to add this session to
         checkpoint_id: Optional checkpoint to restore from
         context: Additional context including files, dependencies, environment
         options: Advanced options (streaming, hooks, analytics, etc.)
@@ -777,6 +1021,8 @@ async def create_session(
     Returns:
         Complete session information with ID, status, and metadata
     """
+    logger.debug(f"Tool called: create_session with project_id={project_id}")
+    
     try:
         # Validate inputs
         prompt = validate_prompt(prompt)
@@ -786,6 +1032,19 @@ async def create_session(
         # if hasattr(state, 'current_user'):
         #     state.rate_limiter.check_user_limit(state.current_user, "sessions", 10)
         
+        # If project_id provided, get project defaults
+        project = None
+        if project_id:
+            project = await state.managers['project'].get_project(project_id)
+            if not project:
+                raise InvalidRequestError(f"Project {project_id} not found")
+            
+            # Apply project defaults if not overridden
+            if not model and project.default_model:
+                model = project.default_model
+            if not context and project.default_context:
+                context = project.default_context.copy()
+        
         # Create session with full options
         session = await state.managers['session'].create_session(
             prompt=prompt,
@@ -794,6 +1053,14 @@ async def create_session(
             context=context or {},
             options=options or {}
         )
+        
+        # Add session to project if specified
+        if project_id:
+            await state.managers['project'].add_session_to_project(
+                project_id=project_id,
+                session_id=session.id,
+                set_active=True
+            )
         
         # Register hooks if specified
         if options and options.get('hooks'):
@@ -810,11 +1077,13 @@ async def create_session(
         return {
             "status": "created",
             "session": session.to_dict(),
+            "project_id": project_id,
             "metadata": {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "estimated_tokens": len(prompt.split()) * 1.3,  # Rough estimate
                 "checkpoint_restored": checkpoint_id is not None,
-                "hooks_registered": len(options.get('hooks', [])) if options else 0
+                "hooks_registered": len(options.get('hooks', [])) if options else 0,
+                "in_project": project_id is not None
             }
         }
         
@@ -2027,6 +2296,263 @@ async def mcp_add_json(
 
 
 @mcp.tool()
+async def archive_project(
+    project_id: str
+) -> Dict[str, Any]:
+    """
+    Archive a project to mark it as no longer active.
+    
+    Args:
+        project_id: ID of the project to archive
+    
+    Returns:
+        Archived project details
+    """
+    logger.debug(f"Tool called: archive_project with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].archive_project(project_id)
+        
+        return {
+            "status": "success",
+            "project": project.to_dict(),
+            "message": f"Project '{project.name}' archived successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Archive project error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to archive project: {str(e)}")
+
+
+@mcp.tool()
+async def get_project_sessions(
+    project_id: str,
+    include_archived: bool = False
+) -> Dict[str, Any]:
+    """
+    Get all sessions in a project.
+    
+    Args:
+        project_id: ID of the project
+        include_archived: Whether to include sessions from archived projects
+    
+    Returns:
+        List of sessions in the project
+    """
+    logger.debug(f"Tool called: get_project_sessions with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].get_project(project_id)
+        if not project:
+            return {
+                "status": "error",
+                "error": f"Project {project_id} not found"
+            }
+        
+        session_ids = await state.managers['project'].get_project_sessions(
+            project_id=project_id,
+            include_archived=include_archived
+        )
+        
+        # Get full session details
+        sessions = []
+        for session_id in session_ids:
+            session = await state.managers['session'].get_session(session_id)
+            if session:
+                sessions.append(session.to_dict())
+        
+        return {
+            "status": "success",
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "status": project.status.value
+            },
+            "sessions": sessions,
+            "session_count": len(sessions)
+        }
+        
+    except Exception as e:
+        logger.error(f"Get project sessions error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to get project sessions: {str(e)}")
+
+
+@mcp.tool()
+async def clone_project(
+    project_id: str,
+    new_name: str,
+    include_sessions: bool = False
+) -> Dict[str, Any]:
+    """
+    Clone an existing project to create a new one.
+    
+    Args:
+        project_id: ID of the project to clone
+        new_name: Name for the cloned project
+        include_sessions: Whether to clone sessions (not implemented yet)
+    
+    Returns:
+        Cloned project details
+    """
+    logger.debug(f"Tool called: clone_project with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        cloned_project = await state.managers['project'].clone_project(
+            project_id=project_id,
+            new_name=new_name,
+            include_sessions=include_sessions
+        )
+        
+        return {
+            "status": "success",
+            "project": cloned_project.to_dict(),
+            "message": f"Project cloned successfully as '{new_name}'",
+            "cloned_from": project_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Clone project error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to clone project: {str(e)}")
+
+
+@mcp.tool()
+async def create_project_checkpoint(
+    project_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create a checkpoint for all sessions in a project.
+    
+    Args:
+        project_id: ID of the project
+        name: Optional checkpoint name
+        description: Optional description
+    
+    Returns:
+        Project checkpoint information
+    """
+    logger.debug(f"Tool called: create_project_checkpoint with id={project_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        checkpoint_info = await state.managers['project'].create_project_checkpoint(
+            project_id=project_id,
+            name=name,
+            description=description
+        )
+        
+        # Create individual checkpoints for each session
+        project = await state.managers['project'].get_project(project_id)
+        if project:
+            for session_id in project.session_ids:
+                try:
+                    session_checkpoint = await state.managers['checkpoint'].create_checkpoint(
+                        session_id=session_id,
+                        name=f"{checkpoint_info['name']} - Session {session_id}",
+                        description=f"Part of project checkpoint: {checkpoint_info['checkpoint_id']}",
+                        tags=["project_checkpoint", project_id]
+                    )
+                    checkpoint_info["session_checkpoints"].append({
+                        "session_id": session_id,
+                        "checkpoint_id": session_checkpoint.id
+                    })
+                except Exception as e:
+                    logger.error(f"Failed to checkpoint session {session_id}: {e}")
+        
+        return {
+            "status": "success",
+            "checkpoint": checkpoint_info,
+            "message": f"Created checkpoint for {len(checkpoint_info['session_checkpoints'])} sessions"
+        }
+        
+    except Exception as e:
+        logger.error(f"Create project checkpoint error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to create project checkpoint: {str(e)}")
+
+
+@mcp.tool()
+async def set_project_active_session(
+    project_id: str,
+    session_id: str
+) -> Dict[str, Any]:
+    """
+    Set the active session for a project.
+    
+    Args:
+        project_id: ID of the project
+        session_id: ID of the session to make active
+    
+    Returns:
+        Updated project details
+    """
+    logger.debug(f"Tool called: set_project_active_session project={project_id}, session={session_id}")
+    
+    if not state.initialized:
+        return {
+            "status": "error",
+            "error": "Server is still initializing",
+            "retry_after": 2
+        }
+    
+    try:
+        project = await state.managers['project'].get_project(project_id)
+        if not project:
+            return {
+                "status": "error",
+                "error": f"Project {project_id} not found"
+            }
+        
+        # Verify session is in project
+        if session_id not in project.session_ids:
+            return {
+                "status": "error",
+                "error": f"Session {session_id} is not in project {project_id}"
+            }
+        
+        # Set active session
+        project.set_active_session(session_id)
+        await state.managers['project']._save_project(project)
+        
+        return {
+            "status": "success",
+            "project": project.to_dict(),
+            "message": f"Active session set to {session_id}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Set active session error: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to set active session: {str(e)}")
+
+
+@mcp.tool()
 async def mcp_serve(
     name: str,
     port: Optional[int] = None,
@@ -2136,6 +2662,40 @@ async def get_agents() -> str:
         agent_list.append(agent_dict)
     
     return json.dumps({"agents": agent_list}, indent=2)
+
+
+@mcp.resource("shannon://projects")
+@require_initialized
+async def get_projects() -> str:
+    """List all projects with their current state."""
+    projects, total = await state.managers['project'].list_projects(limit=100)
+    
+    return json.dumps({
+        "projects": [p.to_dict() for p in projects],
+        "total": total
+    }, indent=2)
+
+
+@mcp.resource("shannon://projects/{project_id}")
+@require_initialized
+async def get_project_resource(project_id: str) -> str:
+    """Detailed information about a specific project including sessions."""
+    project = await state.managers['project'].get_project(project_id)
+    if not project:
+        return json.dumps({"error": f"Project {project_id} not found"})
+    
+    # Get full details including sessions
+    details = project.to_dict()
+    
+    # Add session details
+    sessions = []
+    for session_id in project.session_ids:
+        session = await state.managers['session'].get_session(session_id)
+        if session:
+            sessions.append(session.to_dict())
+    details['sessions'] = sessions
+    
+    return json.dumps(details, indent=2)
 
 
 @mcp.resource("shannon://sessions")
@@ -2321,10 +2881,13 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 @mcp.run()
 async def on_startup():
     """Initialize the server when MCP starts."""
-    global state
-    state = ServerState()
-    await state.initialize()
-    logger.info("Shannon MCP Server initialized and ready")
+    logger.debug("FastMCP on_startup called")
+    # State initialization is handled by the lifespan context manager
+    # No need to initialize here
+    if state.initialized:
+        logger.info("Shannon MCP Server already initialized")
+    else:
+        logger.info("Shannon MCP Server starting...")
 
 # ===== MAIN ENTRY POINT =====
 

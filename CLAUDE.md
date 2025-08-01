@@ -51,24 +51,24 @@ python ~/.claude/activate-mcp-system.py
 /mcp-agent-context view --agent-name "Architecture Agent"
 ```
 
-### Project Setup (once implemented)
+### Project Setup
 ```bash
-# Install dependencies with Poetry
-poetry install
+# Install dependencies with uv
+uv sync
 
 # Run tests
-poetry run pytest
+uv run pytest
 
 # Run linting
-poetry run black . --check
-poetry run flake8
-poetry run mypy .
+uv run black . --check
+uv run flake8
+uv run mypy .
 
 # Build package
-poetry build
+uv build
 
 # Run MCP server
-poetry run shannon-mcp
+uv run shannon-mcp
 ```
 
 ## Project Structure
@@ -86,7 +86,7 @@ shannon-mcp/
 │   ├── mcp/                   # MCP protocol implementation
 │   └── utils/                 # Utilities
 ├── tests/                      # Test suites (to be created)
-├── pyproject.toml             # Poetry configuration (to be created)
+├── pyproject.toml             # uv/pip configuration
 └── README.md                  # Project documentation
 ```
 

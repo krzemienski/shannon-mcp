@@ -63,8 +63,15 @@ class JSONFormatter(logging.Formatter):
             if key not in ('name', 'msg', 'args', 'created', 'filename',
                           'funcName', 'levelname', 'levelno', 'lineno',
                           'module', 'msecs', 'message', 'pathname', 'process',
-                          'processName', 'relativeCreated', 'thread', 'threadName'):
-                log_obj[key] = value
+                          'processName', 'relativeCreated', 'thread', 'threadName',
+                          'exc_info', 'exc_text', 'stack_info'):
+                try:
+                    # Try to serialize the value to check if it's JSON-serializable
+                    json.dumps(value)
+                    log_obj[key] = value
+                except (TypeError, ValueError):
+                    # If not serializable, convert to string
+                    log_obj[key] = str(value)
                 
         # Add exception info if present
         if record.exc_info:

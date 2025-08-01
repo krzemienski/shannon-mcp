@@ -18,7 +18,7 @@ from typing import Optional, Dict, Any, List, Union, Type, TypeVar, Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 import toml
-from pydantic import BaseModel, Field, validator, ValidationError
+from pydantic import BaseModel, Field, field_validator, ValidationError, ConfigDict
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 import structlog
@@ -41,8 +41,7 @@ class ConfigSource(BaseModel):
     priority: int = 0
     source_type: str = "dict"
     
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class DatabaseConfig(BaseModel):
@@ -53,7 +52,8 @@ class DatabaseConfig(BaseModel):
     journal_mode: str = "WAL"
     synchronous: str = "NORMAL"
     
-    @validator('path')
+    @field_validator('path')
+    @classmethod
     def validate_path(cls, v):
         """Ensure path is absolute."""
         return v.absolute()
@@ -69,7 +69,8 @@ class LoggingConfig(BaseModel):
     enable_sentry: bool = False
     sentry_dsn: Optional[str] = None
     
-    @validator('level')
+    @field_validator('level')
+    @classmethod
     def validate_level(cls, v):
         """Validate log level."""
         valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -86,7 +87,8 @@ class BinaryManagerConfig(BaseModel):
     cache_timeout: int = 3600  # 1 hour
     allowed_versions: Optional[List[str]] = None
     
-    @validator('search_paths', pre=True)
+    @field_validator('search_paths', mode='before')
+    @classmethod
     def parse_search_paths(cls, v):
         """Parse search paths from various formats."""
         if isinstance(v, str):
@@ -190,9 +192,10 @@ class ShannonConfig(BaseModel):
     enable_hot_reload: bool = True
     config_paths: List[Path] = Field(default_factory=list)
     
-    class Config:
-        arbitrary_types_allowed = True
-        validate_assignment = True
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        validate_assignment=True
+    )
 
 
 class ConfigLoader:
