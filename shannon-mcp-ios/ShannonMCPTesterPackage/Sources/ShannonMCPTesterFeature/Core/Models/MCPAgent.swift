@@ -11,6 +11,10 @@ struct MCPAgent: Identifiable, Codable, Equatable {
     var taskCount: Int
     let icon: String
     
+    var isActive: Bool {
+        status != .offline
+    }
+    
     enum AgentCategory: String, Codable, CaseIterable {
         case all = "All"
         case core = "Core"

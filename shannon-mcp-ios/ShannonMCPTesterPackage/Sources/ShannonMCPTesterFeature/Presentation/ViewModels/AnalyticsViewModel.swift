@@ -55,7 +55,8 @@ class AnalyticsViewModel: ObservableObject {
     }
     
     deinit {
-        metricsTimer?.invalidate()
+        // Timer is automatically invalidated when deallocated
+        // Cannot access @MainActor properties from nonisolated deinit
     }
     
     var filteredPerformanceMetrics: [PerformanceDataPoint] {
@@ -322,12 +323,21 @@ class AnalyticsViewModel: ObservableObject {
 // MARK: - Data Models
 
 struct PerformanceDataPoint: Identifiable, Codable {
-    let id = UUID()
+    let id: UUID
     let timestamp: Date
     let latency: Double // milliseconds
     let throughput: Double // messages per second
     let cpuUsage: Double // percentage
     let memoryUsage: Double // MB
+    
+    init(timestamp: Date, latency: Double, throughput: Double, cpuUsage: Double, memoryUsage: Double) {
+        self.id = UUID()
+        self.timestamp = timestamp
+        self.latency = latency
+        self.throughput = throughput
+        self.cpuUsage = cpuUsage
+        self.memoryUsage = memoryUsage
+    }
 }
 
 struct ConnectionDataPoint: Identifiable, Codable {

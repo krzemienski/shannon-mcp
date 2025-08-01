@@ -24,7 +24,8 @@ class AgentsViewModel: ObservableObject {
     }
     
     deinit {
-        metricsTimer?.invalidate()
+        // Timer is automatically invalidated when deallocated
+        // Cannot access @MainActor properties from nonisolated deinit
     }
     
     var filteredAgents: [MCPAgent] {

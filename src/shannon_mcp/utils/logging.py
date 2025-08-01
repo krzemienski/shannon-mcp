@@ -133,6 +133,9 @@ def setup_logging(
     log_dir.mkdir(parents=True, exist_ok=True)
     
     # Configure structlog
+    # In MCP mode, always use JSON renderer to avoid console output
+    renderer = structlog.processors.JSONRenderer() if (enable_json or mcp_mode) else structlog.dev.ConsoleRenderer()
+    
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -143,7 +146,7 @@ def setup_logging(
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            structlog.dev.ConsoleRenderer() if not enable_json else structlog.processors.JSONRenderer()
+            renderer
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -176,6 +179,13 @@ def setup_logging(
         console_formatter = logging.Formatter('%(message)s')
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
+    else:
+        # In MCP mode, only add a stderr handler
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setLevel(logging.WARNING)  # Only warnings and errors to stderr
+        stderr_formatter = logging.Formatter('[%(levelname)s] %(message)s')
+        stderr_handler.setFormatter(stderr_formatter)
+        root_logger.addHandler(stderr_handler)
     
     # File handler with rotation
     file_handler = logging.handlers.RotatingFileHandler(
@@ -260,7 +270,7 @@ def setup_logging(
         enable_json=enable_json,
         enable_sentry=enable_sentry,
         enable_metrics=enable_metrics,
-        pid=sys.pid if hasattr(sys, 'pid') else None,
+        pid=os.getpid() if hasattr(os, 'getpid') else None,
     )
     
     return {

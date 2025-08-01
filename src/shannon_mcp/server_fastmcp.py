@@ -45,9 +45,28 @@ from .utils.errors import (
 from .utils.validators import validate_prompt, validate_model, validate_session_id
 from .utils.metrics import MetricsCollector, track_operation
 
-# Setup logging
-setup_logging("shannon-mcp.server")
-logger = get_logger("shannon-mcp.server")
+# Logger will be initialized lazily
+_logger = None
+
+def _ensure_logger():
+    """Ensure logger is initialized."""
+    global _logger
+    if _logger is None:
+        # Check if we're in stdio mode
+        if os.environ.get('SHANNON_MCP_MODE') == 'stdio':
+            # Ensure logging is set up for stdio mode
+            setup_logging("shannon-mcp.server", enable_json=True)
+        else:
+            setup_logging("shannon-mcp.server")
+        _logger = get_logger("shannon-mcp.server")
+    return _logger
+
+# Create a logger proxy that initializes on first use
+class LoggerProxy:
+    def __getattr__(self, name):
+        return getattr(_ensure_logger(), name)
+
+logger = LoggerProxy()
 
 
 class ServerState:
@@ -2297,6 +2316,16 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 #     }
 
 
+# ===== FASTMCP INITIALIZATION =====
+
+@mcp.run()
+async def on_startup():
+    """Initialize the server when MCP starts."""
+    global state
+    state = ServerState()
+    await state.initialize()
+    logger.info("Shannon MCP Server initialized and ready")
+
 # ===== MAIN ENTRY POINT =====
 
 def main():
@@ -2338,7 +2367,7 @@ def main():
         )
         
         if args.transport == "stdio":
-            mcp.run()
+            mcp.run(show_banner=False)
         elif args.transport == "sse":
             mcp.run(transport="sse", port=args.port or 8000)
         elif args.transport == "websocket":

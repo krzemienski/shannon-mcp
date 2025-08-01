@@ -61,7 +61,7 @@ struct ToolDetailsView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                     
-                    Text(tool.category)
+                    Text(tool.category.rawValue)
                         .font(.caption)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -251,11 +251,9 @@ struct ParameterInputView: View {
                     .clipShape(Capsule())
             }
             
-            if let description = parameter.description {
-                Text(description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            Text(parameter.description)
+                .font(.caption)
+                .foregroundColor(.secondary)
             
             parameterInput
         }

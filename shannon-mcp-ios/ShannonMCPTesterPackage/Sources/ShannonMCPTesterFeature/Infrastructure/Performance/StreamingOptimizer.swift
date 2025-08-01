@@ -2,6 +2,9 @@ import Foundation
 import Combine
 import SwiftUI
 
+#if canImport(UIKit)
+import UIKit
+
 /// Main performance optimization coordinator for high-throughput message streaming
 /// Ensures smooth 60fps UI while processing 10,000+ messages per second
 @MainActor
@@ -118,8 +121,8 @@ final class StreamingOptimizer: ObservableObject {
         frameTimer = nil
     }
     
-    func frameUpdate(_ displayLink: CADisplayLink) {
-        let currentTime = displayLink.timestamp
+    func frameUpdate(timestamp: TimeInterval) {
+        let currentTime = timestamp
         
         if lastFrameTime > 0 {
             let frameDuration = currentTime - lastFrameTime
@@ -232,29 +235,6 @@ final class StreamingOptimizer: ObservableObject {
     }
 }
 
-// MARK: - Supporting Types
-
-struct PerformanceMetrics {
-    // Message metrics
-    var messagesReceived: Int = 0
-    var messagesProcessed: Int = 0
-    var messagesRendered: Int = 0
-    var batchesRendered: Int = 0
-    
-    // Performance metrics
-    var bufferUtilization: Double = 0
-    var dropRate: Double = 0
-    var throughput: Double = 0
-    var averageFPS: Double = 60
-    var frameDrops: Int = 0
-    var averageLatency: TimeInterval = 0
-    var totalProcessingTime: TimeInterval = 0
-    
-    var processingEfficiency: Double {
-        messagesReceived > 0 ? Double(messagesProcessed) / Double(messagesReceived) * 100 : 100
-    }
-}
-
 class PerformanceMonitor {
     private var frameDurations: [TimeInterval] = []
     private let maxSamples = 120 // 2 seconds at 60fps
@@ -338,7 +318,7 @@ struct OptimizationSettings {
 }
 
 // Weak wrapper to handle CADisplayLink target without retain cycles
-private class WeakWrapper: NSObject {
+private class WeakWrapper: NSObject, @unchecked Sendable {
     weak var streamingOptimizer: StreamingOptimizer?
     
     init(_ streamingOptimizer: StreamingOptimizer) {
@@ -347,8 +327,67 @@ private class WeakWrapper: NSObject {
     }
     
     @objc func frameUpdate(_ displayLink: CADisplayLink) {
-        Task { @MainActor in
-            streamingOptimizer?.frameUpdate(displayLink)
+        let timestamp = displayLink.timestamp
+        Task { @MainActor [weak streamingOptimizer] in
+            streamingOptimizer?.frameUpdate(timestamp: timestamp)
         }
+    }
+}
+
+#else
+// macOS fallback implementation without CADisplayLink
+@MainActor
+final class StreamingOptimizer: ObservableObject {
+    @Published var performanceMetrics = PerformanceMetrics()
+    @Published var isOptimizing = false
+    @Published var currentFPS: Double = 60.0
+    
+    init(bufferSize: Int = 65536, viewportSize: Int = 50) {
+        // Simplified macOS implementation
+    }
+    
+    func processResponse(_ response: MCPResponse) {
+        // Simplified processing for macOS
+        performanceMetrics.messagesReceived += 1
+    }
+    
+    func processResponses(_ responses: [MCPResponse]) {
+        performanceMetrics.messagesReceived += responses.count
+    }
+    
+    func flush() {
+        // No-op for macOS
+    }
+    
+    func optimizeSettings() {
+        // No-op for macOS
+    }
+    
+    func frameUpdate(timestamp: TimeInterval) {
+        // No-op for macOS
+    }
+}
+#endif
+
+// MARK: - Supporting Types (Shared between iOS and macOS)
+
+struct PerformanceMetrics {
+    // Message metrics
+    var messagesReceived: Int = 0
+    var messagesProcessed: Int = 0
+    var messagesRendered: Int = 0
+    var batchesRendered: Int = 0
+    
+    // Performance metrics
+    var bufferUtilization: Double = 0
+    var dropRate: Double = 0
+    var throughput: Double = 0
+    var averageFPS: Double = 60
+    var frameDrops: Int = 0
+    var averageLatency: TimeInterval = 0
+    var totalProcessingTime: TimeInterval = 0
+    
+    var processingEfficiency: Double {
+        messagesReceived > 0 ? Double(messagesProcessed) / Double(messagesReceived) * 100 : 100
     }
 }

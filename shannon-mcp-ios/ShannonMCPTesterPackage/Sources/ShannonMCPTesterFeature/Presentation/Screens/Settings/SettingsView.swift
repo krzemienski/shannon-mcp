@@ -117,7 +117,7 @@ struct ConnectionSettingsSection: View {
             }
             
             Picker("Transport", selection: $transport) {
-                ForEach(AppState.TransportType.allCases, id: \.self) { type in
+                ForEach(TransportType.allCases, id: \.self) { type in
                     Text(type.rawValue).tag(type)
                 }
             }

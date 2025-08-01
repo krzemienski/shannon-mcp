@@ -1,14 +1,16 @@
 import SwiftUI
 
-struct ContentView: View {
+public struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedTab = Tab.dashboard
+    
+    public init() {}
     
     enum Tab {
         case dashboard, tools, sessions, agents, analytics, streaming, settings
     }
     
-    var body: some View {
+    public var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView()
                 .tabItem {

@@ -15,6 +15,10 @@ class MCPService: ObservableObject {
     private let jsonlParser = JSONLParser()
     private let backpressureHandler = BackpressureHandler()
     
+    // Response correlation
+    private var pendingRequests = [String: Any]()
+    private var sessionUpdateStreams = [String: AsyncStream<SessionUpdate>.Continuation]()
+    
     // Metrics
     @Published var metrics = MCPMetrics()
     
@@ -155,21 +159,30 @@ class MCPService: ObservableObject {
         
         let startTime = Date()
         
-        do {
-            try await client.sendRequest(request)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            // Store the continuation for response correlation
+            pendingRequests[request.id] = continuation
             
-            // For now, we'll need to implement response correlation
-            // This is a simplified version - real implementation would correlate by request ID
-            
-            let duration = Date().timeIntervalSince(startTime)
-            metrics.recordRequest(duration: duration, success: true)
-            
-            // Placeholder - actual response handling would be more complex
-            throw MCPError.notImplemented("Response correlation not yet implemented")
-        } catch {
-            let duration = Date().timeIntervalSince(startTime)
-            metrics.recordRequest(duration: duration, success: false)
-            throw error
+            Task {
+                do {
+                    try await client.sendRequest(request)
+                    metrics.incrementMessagesSent()
+                    
+                    // Set up a timeout for the response
+                    Task {
+                        try await Task.sleep(for: .seconds(30))
+                        if pendingRequests[request.id] != nil {
+                            pendingRequests.removeValue(forKey: request.id)
+                            continuation.resume(throwing: MCPError.timeout)
+                        }
+                    }
+                } catch {
+                    pendingRequests.removeValue(forKey: request.id)
+                    let duration = Date().timeIntervalSince(startTime)
+                    metrics.recordRequest(duration: duration, success: false)
+                    continuation.resume(throwing: error)
+                }
+            }
         }
     }
     
@@ -195,12 +208,22 @@ class MCPService: ObservableObject {
         if let method = response.method {
             // Handle server-initiated messages (notifications)
             handleNotification(method: method, params: response.params)
+        } else if let requestId = response.id, let continuation = pendingRequests.removeValue(forKey: requestId) as? CheckedContinuation<Any?, Error> {
+            // Handle response to a pending request
+            if let error = response.error {
+                continuation.resume(throwing: MCPError.serverError(code: error.code, message: error.message))
+            } else if let result = response.result {
+                continuation.resume(returning: result)
+                
+                // Record successful response time
+                let duration = Date().timeIntervalSince(Date()) // Should track request start time
+                metrics.recordRequest(duration: duration, success: true)
+            } else {
+                continuation.resume(throwing: MCPError.invalidResponse("No result or error in response"))
+            }
         } else if let error = response.error {
-            // Handle error responses
-            handleErrorResponse(error)
-        } else if response.result != nil {
-            // Handle successful responses
-            // This would be correlated with pending requests
+            // Handle error responses without matching request
+            currentError = MCPError.serverError(code: error.code, message: error.message)
         }
     }
     
@@ -208,17 +231,80 @@ class MCPService: ObservableObject {
         // Handle different notification types
         switch method {
         case "session.update":
-            // Handle session updates
-            break
+            handleSessionUpdate(params)
+        case "session.message":
+            handleSessionMessage(params)
+        case "session.streaming":
+            handleSessionStreaming(params)
         case "agent.status":
-            // Handle agent status updates
-            break
+            handleAgentStatus(params)
         case "stream.data":
-            // Handle streaming data
-            break
+            handleStreamData(params)
         default:
             print("Unknown notification: \(method)")
         }
+    }
+    
+    private func handleSessionUpdate(_ params: AnyCodable?) {
+        guard let params = params?.value as? [String: Any],
+              let sessionId = params["sessionId"] as? String,
+              let stateRaw = params["state"] as? String,
+              let state = MCPSession.SessionState(rawValue: stateRaw),
+              let continuation = sessionUpdateStreams[sessionId] else { return }
+        
+        continuation.yield(.stateChanged(state))
+    }
+    
+    private func handleSessionMessage(_ params: AnyCodable?) {
+        guard let params = params?.value as? [String: Any],
+              let sessionId = params["sessionId"] as? String,
+              let messageData = params["message"] as? [String: Any],
+              let continuation = sessionUpdateStreams[sessionId] else { return }
+        
+        // Parse message from params
+        if let message = parseMessage(from: messageData) {
+            continuation.yield(.messageAdded(message))
+        }
+    }
+    
+    private func handleSessionStreaming(_ params: AnyCodable?) {
+        guard let params = params?.value as? [String: Any],
+              let sessionId = params["sessionId"] as? String,
+              let continuation = sessionUpdateStreams[sessionId] else { return }
+        
+        if let content = params["content"] as? String {
+            continuation.yield(.streamingContent(content))
+        } else if let complete = params["complete"] as? Bool, complete {
+            continuation.yield(.streamingComplete)
+        }
+    }
+    
+    private func handleAgentStatus(_ params: AnyCodable?) {
+        // Handle agent status updates
+        // This would update agent state in the app
+    }
+    
+    private func handleStreamData(_ params: AnyCodable?) {
+        // Handle generic streaming data
+        // Could be logs, metrics, etc.
+    }
+    
+    private func parseMessage(from data: [String: Any]) -> MCPMessage? {
+        guard let id = data["id"] as? String,
+              let sessionId = data["sessionId"] as? String,
+              let roleRaw = data["role"] as? String,
+              let role = MCPMessage.MessageRole(rawValue: roleRaw),
+              let content = data["content"] as? String else { return nil }
+        
+        let timestamp = data["timestamp"] as? TimeInterval ?? Date().timeIntervalSince1970
+        
+        return MCPMessage(
+            id: id,
+            sessionId: sessionId,
+            role: role,
+            content: content,
+            timestamp: Date(timeIntervalSince1970: timestamp)
+        )
     }
     
     private func handleErrorResponse(_ error: MCPErrorResponse) {
@@ -388,6 +474,45 @@ extension MCPService {
             duration: 0.5
         )
     }
+    
+    // MARK: - Session Streaming Support
+    
+    func sessionUpdates(for sessionId: String) -> AsyncStream<SessionUpdate> {
+        AsyncStream { continuation in
+            // Store the continuation for this session
+            sessionUpdateStreams[sessionId] = continuation
+            
+            // Clean up when the stream is terminated
+            continuation.onTermination = { [weak self] _ in
+                Task { @MainActor in
+                    self?.sessionUpdateStreams.removeValue(forKey: sessionId)
+                }
+            }
+            
+            // Send a subscription request to the server
+            Task {
+                do {
+                    let params = ["sessionId": sessionId, "subscribe": true]
+                    let request = MCPRequest(method: "session.subscribe", params: AnyCodable(params))
+                    try await networkClient?.sendRequest(request)
+                } catch {
+                    continuation.yield(.error(error))
+                }
+            }
+        }
+    }
+    
+    func cancelSession(_ sessionId: String) async throws {
+        // Send cancel request to MCP server
+        let params = ["sessionId": sessionId]
+        let request = MCPRequest(method: "cancel_session", params: AnyCodable(params))
+        
+        try await networkClient?.sendRequest(request)
+    }
+    
+    func createCheckpoint(sessionId: String, description: String) async throws {
+        _ = try await setCheckpoint(sessionId: sessionId, name: "checkpoint_\(Date().timeIntervalSince1970)", description: description)
+    }
 }
 
 // MARK: - Error Types
@@ -399,6 +524,8 @@ enum MCPError: LocalizedError {
     case streamingError(String)
     case serverError(code: Int, message: String)
     case notImplemented(String)
+    case timeout
+    case invalidResponse(String)
     
     var errorDescription: String? {
         switch self {
@@ -414,6 +541,10 @@ enum MCPError: LocalizedError {
             return "Server error (\(code)): \(message)"
         case .notImplemented(let feature):
             return "\(feature) not implemented"
+        case .timeout:
+            return "Request timed out"
+        case .invalidResponse(let message):
+            return "Invalid response: \(message)"
         }
     }
 }

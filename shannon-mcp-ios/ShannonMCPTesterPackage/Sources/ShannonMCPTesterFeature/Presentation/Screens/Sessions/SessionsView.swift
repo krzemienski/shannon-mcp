@@ -48,7 +48,7 @@ struct SessionsView: View {
             }
             .searchable(text: $searchText, prompt: "Search sessions")
             .navigationTitle("Sessions")
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
                         Button("All") {
@@ -69,12 +69,12 @@ struct SessionsView: View {
                         Image(systemName: "plus")
                     }
                 }
-            }
+            })
             .sheet(isPresented: $showingNewSession) {
                 CreateSessionView()
             }
             .sheet(item: $selectedSession) { session in
-                SessionDetailView(session: session)
+                SessionDetailStreamingView(session: session)
             }
         }
     }
@@ -131,7 +131,7 @@ struct SessionListRow: View {
                     .font(.caption2)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background(Color(.tertiarySystemBackground))
+                    .background(Color.secondary.opacity(0.1))
                     .cornerRadius(4)
             }
         }
@@ -173,7 +173,7 @@ struct CreateSessionView: View {
             }
             .navigationTitle("New Session")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         dismiss()
@@ -186,7 +186,7 @@ struct CreateSessionView: View {
                     }
                     .disabled(prompt.isEmpty)
                 }
-            }
+            })
         }
     }
     
@@ -231,13 +231,13 @@ struct SessionDetailView: View {
             }
             .navigationTitle("Session Details")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+            .toolbar(content: {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
                 }
-            }
+            })
         }
     }
 }

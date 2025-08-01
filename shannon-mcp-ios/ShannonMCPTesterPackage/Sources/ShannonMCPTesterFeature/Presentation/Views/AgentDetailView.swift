@@ -121,7 +121,7 @@ struct AgentDetailView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                     
-                    Text(agent.role)
+                    Text(agent.description)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                     
@@ -131,7 +131,7 @@ struct AgentDetailView: View {
                         Text("•")
                             .foregroundColor(.secondary)
                         
-                        Text(agent.category)
+                        Text(agent.category.rawValue)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

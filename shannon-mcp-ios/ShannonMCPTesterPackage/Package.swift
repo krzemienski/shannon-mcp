@@ -5,7 +5,10 @@ import PackageDescription
 
 let package = Package(
     name: "ShannonMCPTesterFeature",
-    platforms: [.iOS(.v18)],
+    platforms: [
+        .iOS(.v18),
+        .macOS(.v13)
+    ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
@@ -24,6 +27,10 @@ let package = Package(
             name: "ShannonMCPTesterFeature",
             dependencies: [
                 .product(name: "SwiftMCP", package: "SwiftMCP"),
+            ],
+            exclude: [
+                "Infrastructure/Network/SSEClient.swift.bak",
+                "Infrastructure/Network/WebSocketClient.swift.bak"
             ]
         ),
         .testTarget(

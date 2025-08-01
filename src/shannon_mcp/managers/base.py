@@ -259,13 +259,13 @@ class BaseManager(ABC, Generic[T]):
         if event not in self._event_handlers:
             self._event_handlers[event] = []
         self._event_handlers[event].append(handler)
-        self.logger.debug("event_handler_registered", event=event)
+        self.logger.debug("event_handler_registered", event_type=event)
     
     def unregister_event_handler(self, event: str, handler: Callable) -> None:
         """Unregister an event handler."""
         if event in self._event_handlers:
             self._event_handlers[event].remove(handler)
-            self.logger.debug("event_handler_unregistered", event=event)
+            self.logger.debug("event_handler_unregistered", event_type=event)
     
     async def _notify_event(self, event: str, data: Dict[str, Any]) -> None:
         """Notify all handlers of an event."""
@@ -282,7 +282,7 @@ class BaseManager(ABC, Generic[T]):
             except Exception as e:
                 self.logger.error(
                     "event_handler_error",
-                    event=event,
+                    event_type=event,
                     handler=handler.__name__,
                     error=str(e)
                 )

@@ -1,6 +1,6 @@
 import Foundation
 
-struct AppSettings: Codable {
+struct AppSettings: Codable, Equatable {
     var serverURL: String = "http://localhost:8080"
     var transport: TransportType = .sse
     var autoReconnect: Bool = true

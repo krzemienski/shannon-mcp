@@ -1,14 +1,14 @@
 import Foundation
 import Combine
 
-enum TransportType: String, CaseIterable, Codable {
+public enum TransportType: String, CaseIterable, Codable {
     case sse = "SSE"
     case websocket = "WebSocket"
     case http = "HTTP"
 }
 
 @MainActor
-class AppState: ObservableObject {
+public class AppState: ObservableObject {
     // Connection State
     @Published var isConnected = false
     @Published var connectionStatus: ConnectionStatus = .disconnected
@@ -40,7 +40,7 @@ class AppState: ObservableObject {
         case error(String)
     }
     
-    init() {
+    public init() {
         loadSettings()
         initializeAgents()
     }

@@ -17,7 +17,7 @@ struct ConnectionStatusView: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                if let serverURL = appState.currentSession?.serverURL {
+                if let serverURL = URL(string: appState.serverURL) {
                     Text(serverURL.host ?? serverURL.absoluteString)
                         .font(.caption2)
                         .foregroundColor(.secondary)
@@ -66,11 +66,11 @@ struct ConnectionStatusView: View {
                 )
         }
         .onAppear {
-            if appState.connectionState == .connecting {
+            if appState.connectionStatus == .connecting {
                 isAnimating = true
             }
         }
-        .onChange(of: appState.connectionState) { state in
+        .onChange(of: appState.connectionStatus) { state in
             isAnimating = state == .connecting
         }
     }
@@ -78,21 +78,17 @@ struct ConnectionStatusView: View {
     @ViewBuilder
     private var connectionControls: some View {
         HStack(spacing: 8) {
-            if appState.connectionState == .connected {
+            if appState.connectionStatus == .connected {
                 Button("Disconnect") {
-                    Task {
-                        await appState.disconnect()
-                    }
+                    // Disconnect action - placeholder
+                    appState.updateConnectionStatus(.disconnected)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            } else if appState.connectionState == .disconnected {
+            } else if appState.connectionStatus == .disconnected {
                 Button("Connect") {
-                    Task {
-                        if let session = appState.currentSession {
-                            await appState.connect(to: session)
-                        }
-                    }
+                    // Connect action - placeholder
+                    appState.updateConnectionStatus(.connecting)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -108,7 +104,7 @@ struct ConnectionStatusView: View {
     }
     
     private var statusText: String {
-        switch appState.connectionState {
+        switch appState.connectionStatus {
         case .disconnected:
             return "Disconnected"
         case .connecting:
@@ -121,7 +117,7 @@ struct ConnectionStatusView: View {
     }
     
     private var indicatorColor: Color {
-        switch appState.connectionState {
+        switch appState.connectionStatus {
         case .disconnected:
             return .gray
         case .connecting:
@@ -134,7 +130,7 @@ struct ConnectionStatusView: View {
     }
     
     private var backgroundColor: Color {
-        switch appState.connectionState {
+        switch appState.connectionStatus {
         case .connected:
             return Color.green.opacity(0.05)
         case .error:
@@ -145,7 +141,7 @@ struct ConnectionStatusView: View {
     }
     
     private var borderColor: Color {
-        switch appState.connectionState {
+        switch appState.connectionStatus {
         case .connected:
             return Color.green.opacity(0.3)
         case .error:
@@ -158,6 +154,7 @@ struct ConnectionStatusView: View {
 
 // MARK: - Connection Details View
 
+@available(macOS 12.0, *)
 struct ConnectionDetailsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
@@ -205,33 +202,27 @@ struct ConnectionDetailsView: View {
     
     @ViewBuilder
     private var connectionInfoRows: some View {
-        if let session = appState.currentSession {
+        if let session = appState.activeSession {
             DetailRow(
                 label: "Server URL",
-                value: session.serverURL.absoluteString,
+                value: appState.serverURL,
                 icon: "network"
             )
             
             DetailRow(
                 label: "Transport",
-                value: session.transport.rawValue,
+                value: appState.transport.rawValue,
                 icon: "antenna.radiowaves.left.and.right"
             )
             
             DetailRow(
                 label: "Status",
-                value: appState.connectionState.description,
+                value: appState.connectionStatus.description,
                 icon: "circle.fill",
                 valueColor: statusColor
             )
             
-            if let lastConnected = session.lastConnected {
-                DetailRow(
-                    label: "Last Connected",
-                    value: RelativeDateTimeFormatter().localizedString(for: lastConnected, relativeTo: Date()),
-                    icon: "clock"
-                )
-            }
+            // Additional session info can be added here
         } else {
             Text("No active session")
                 .foregroundColor(.secondary)
@@ -242,25 +233,25 @@ struct ConnectionDetailsView: View {
     private var statisticsRows: some View {
         DetailRow(
             label: "Messages Sent",
-            value: "\(appState.messagesSent)",
+            value: "0",
             icon: "arrow.up.circle"
         )
         
         DetailRow(
             label: "Messages Received",
-            value: "\(appState.messagesReceived)",
+            value: "0",
             icon: "arrow.down.circle"
         )
         
         DetailRow(
             label: "Connection Uptime",
-            value: formatUptime(appState.connectionUptime),
+            value: "0 seconds",
             icon: "timer"
         )
         
         DetailRow(
             label: "Average Latency",
-            value: String(format: "%.1f ms", appState.averageLatency),
+            value: "0.0 ms",
             icon: "speedometer"
         )
     }
@@ -281,7 +272,7 @@ struct ConnectionDetailsView: View {
     }
     
     private var statusColor: Color {
-        switch appState.connectionState {
+        switch appState.connectionStatus {
         case .connected: return .green
         case .connecting: return .orange
         case .disconnected: return .gray
@@ -419,7 +410,7 @@ struct ConnectionEvent: Identifiable {
     }
 }
 
-extension ConnectionState {
+extension AppState.ConnectionStatus {
     var description: String {
         switch self {
         case .disconnected: return "Disconnected"

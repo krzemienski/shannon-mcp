@@ -257,6 +257,7 @@ struct AgentCard: View {
     }
 }
 
+@available(macOS 12.0, *)
 struct AgentDetailCard: View {
     let agent: MCPAgent
     @Environment(\.dismiss) var dismiss
