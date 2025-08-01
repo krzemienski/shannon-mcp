@@ -178,6 +178,11 @@ class BinaryManager(BaseManager[BinaryInfo]):
         """Initialize binary manager."""
         logger.info("initializing_binary_manager")
         
+        # Skip binary discovery in MCP stdio mode during init
+        if os.environ.get('SHANNON_MCP_MODE') == 'stdio':
+            logger.info("skipping_initial_discovery_in_stdio_mode")
+            return
+            
         # Discover binary on initialization
         try:
             await self.discover_binary()
@@ -355,16 +360,24 @@ class BinaryManager(BaseManager[BinaryInfo]):
                 result = await asyncio.create_subprocess_exec(
                     "which", name,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.DEVNULL,
+                    env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
                 )
-                stdout, _ = await result.communicate()
+                stdout, _ = await asyncio.wait_for(
+                    result.communicate(),
+                    timeout=5.0
+                )
                 
                 if result.returncode == 0 and stdout:
                     path = Path(stdout.decode().strip())
                     if path.exists() and path.is_file():
                         return await self._create_binary_info(path, "which")
                         
-            except Exception:
+            except asyncio.TimeoutError:
+                logger.debug(f"which command timed out for {name}")
+                continue
+            except Exception as e:
+                logger.debug(f"which command failed for {name}: {e}")
                 continue
         
         return None
@@ -376,10 +389,13 @@ class BinaryManager(BaseManager[BinaryInfo]):
                 result = await asyncio.create_subprocess_exec(
                     "where", name,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                     shell=True
                 )
-                stdout, _ = await result.communicate()
+                stdout, _ = await asyncio.wait_for(
+                    result.communicate(),
+                    timeout=5.0
+                )
                 
                 if result.returncode == 0 and stdout:
                     # 'where' can return multiple paths
@@ -388,7 +404,11 @@ class BinaryManager(BaseManager[BinaryInfo]):
                         if path.exists() and path.is_file():
                             return await self._create_binary_info(path, "where")
                             
-            except Exception:
+            except asyncio.TimeoutError:
+                logger.debug(f"where command timed out for {name}")
+                continue
+            except Exception as e:
+                logger.debug(f"where command failed for {name}: {e}")
                 continue
         
         return None
@@ -460,11 +480,15 @@ class BinaryManager(BaseManager[BinaryInfo]):
     
     async def _create_binary_info(self, path: Path, method: str) -> BinaryInfo:
         """Create binary info by executing version check."""
+        logger.debug(f"_create_binary_info called for {path}")
+        
         # Get version
         version_str = await self._get_binary_version(path)
+        logger.debug(f"Got version: {version_str}")
         
         # Get build info
         build_info = await self._get_build_info(path)
+        logger.debug(f"Got build_info: {build_info}")
         
         return BinaryInfo(
             path=path.absolute(),
@@ -481,9 +505,13 @@ class BinaryManager(BaseManager[BinaryInfo]):
             result = await asyncio.create_subprocess_exec(
                 str(path), "--version",
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await asyncio.wait_for(
+                result.communicate(),
+                timeout=5.0
+            )
             
             if result.returncode == 0 and stdout:
                 # Parse version from output
@@ -512,9 +540,13 @@ class BinaryManager(BaseManager[BinaryInfo]):
             result = await asyncio.create_subprocess_exec(
                 str(path), "--build-info",
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await asyncio.wait_for(
+                result.communicate(),
+                timeout=2.0  # Short timeout for optional flag
+            )
             
             if result.returncode == 0 and stdout:
                 try:
@@ -525,8 +557,10 @@ class BinaryManager(BaseManager[BinaryInfo]):
                         if ":" in line:
                             key, value = line.split(":", 1)
                             info[key.strip().lower().replace(" ", "_")] = value.strip()
-        except Exception:
-            pass
+        except asyncio.TimeoutError:
+            logger.debug(f"build_info_timeout", path=str(path))
+        except Exception as e:
+            logger.debug(f"build_info_failed", path=str(path), error=str(e))
         
         # Get file modification time as fallback build date
         if "build_date" not in info:
@@ -562,9 +596,13 @@ class BinaryManager(BaseManager[BinaryInfo]):
             result = await asyncio.create_subprocess_exec(
                 str(binary.path), "--help",
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, 'PYTHONWARNINGS': 'ignore'}
             )
-            stdout, stderr = await result.communicate()
+            stdout, _ = await asyncio.wait_for(
+                result.communicate(),
+                timeout=5.0
+            )
             
             return result.returncode == 0
             

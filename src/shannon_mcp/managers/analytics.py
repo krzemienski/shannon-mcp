@@ -14,6 +14,7 @@ import statistics
 
 from .base import BaseManager, ManagerConfig, ManagerError
 from ..utils.logging import get_logger
+from ..utils.config import AnalyticsConfig
 
 logger = get_logger("shannon-mcp.managers.analytics")
 
@@ -113,24 +114,21 @@ class AgentAnalytics:
         }
 
 
-@dataclass
-class AnalyticsConfig(ManagerConfig):
-    """Configuration for analytics manager."""
-    retention_days: int = 90
-    aggregation_interval: int = 300  # 5 minutes
-    max_metrics_per_query: int = 10000
-    enable_real_time: bool = True
-    export_interval: int = 3600  # 1 hour
-    export_path: Optional[str] = None
-
-
 class AnalyticsManager(BaseManager[Metric]):
     """Manages analytics and metrics tracking."""
     
     def __init__(self, config: AnalyticsConfig, metrics=None):
         """Initialize analytics manager."""
-        super().__init__(config)
-        self.config: AnalyticsConfig = config
+        from .base import ManagerConfig
+        from pathlib import Path
+        
+        manager_config = ManagerConfig(
+            name="analytics_manager",
+            db_path=config.metrics_path / "analytics.db",
+            custom_config={"retention_days": config.retention_days, "aggregation_interval": config.aggregation_interval}
+        )
+        super().__init__(manager_config)
+        self.analytics_config: AnalyticsConfig = config
         self.metrics_collector = metrics
         self._metrics: List[Metric] = []
         self._session_analytics: Dict[str, SessionAnalytics] = {}
@@ -143,7 +141,7 @@ class AnalyticsManager(BaseManager[Metric]):
         logger.info("Initializing analytics manager")
         
         # Load historical data from database
-        if self.config.db_path:
+        if self.db:
             await self._load_historical_data()
     
     async def _start(self) -> None:
@@ -154,7 +152,7 @@ class AnalyticsManager(BaseManager[Metric]):
         self._aggregation_task = asyncio.create_task(self._aggregation_loop())
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         
-        if self.config.export_path:
+        if hasattr(self.analytics_config, 'export_path') and self.analytics_config.export_path:
             self._export_task = asyncio.create_task(self._export_loop())
     
     async def _stop(self) -> None:
@@ -255,7 +253,7 @@ class AnalyticsManager(BaseManager[Metric]):
             await self._persist_metric(metric)
         
         # Notify real-time subscribers
-        if self.config.enable_real_time:
+        if hasattr(self.analytics_config, 'enable_real_time') and self.analytics_config.enable_real_time:
             await self._notify_subscribers(metric)
         
         # Update metrics collector if available
@@ -657,7 +655,7 @@ class AnalyticsManager(BaseManager[Metric]):
         """Background task to aggregate metrics."""
         while True:
             try:
-                await asyncio.sleep(self.config.aggregation_interval)
+                await asyncio.sleep(self.analytics_config.aggregation_interval)
                 await self._aggregate_metrics()
             except asyncio.CancelledError:
                 break
@@ -682,7 +680,7 @@ class AnalyticsManager(BaseManager[Metric]):
     
     async def _cleanup_old_data(self) -> None:
         """Clean up data older than retention period."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.retention_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.analytics_config.retention_days)
         
         # Clean metrics
         self._metrics = [m for m in self._metrics if m.timestamp > cutoff]
@@ -699,7 +697,7 @@ class AnalyticsManager(BaseManager[Metric]):
         """Background task to export analytics."""
         while True:
             try:
-                await asyncio.sleep(self.config.export_interval)
+                await asyncio.sleep(getattr(self.analytics_config, 'export_interval', 3600))
                 await self._export_analytics()
             except asyncio.CancelledError:
                 break
@@ -801,7 +799,7 @@ class AnalyticsManager(BaseManager[Metric]):
     
     async def subscribe_real_time(self, callback: Callable) -> None:
         """Subscribe to real-time metric updates."""
-        if self.config.enable_real_time:
+        if hasattr(self.analytics_config, 'enable_real_time') and self.analytics_config.enable_real_time:
             self._real_time_subscribers.append(callback)
             logger.info(f"Added real-time subscriber, total: {len(self._real_time_subscribers)}")
     

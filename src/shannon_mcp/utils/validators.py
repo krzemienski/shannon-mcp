@@ -412,3 +412,174 @@ def create_validation_error_response(error: ValidationError) -> Dict[str, Any]:
             }
         }
     }
+
+
+# Specific validation functions for server
+
+def validate_prompt(prompt: str) -> str:
+    """Validate prompt input."""
+    validator = string_validator("prompt", min_length=1, max_length=10000)
+    return validator(prompt)
+
+
+def validate_model(model: str) -> str:
+    """Validate model name."""
+    valid_models = ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku", "claude-2", "claude-2.1"]
+    validator = enum_validator("model", valid_models)
+    return validator(model)
+
+
+def validate_session_id(session_id: str) -> str:
+    """Validate session ID format."""
+    validator = session_id_validator("session_id")
+    validator.validate(session_id)
+    return session_id
+
+
+# Helper validator functions
+
+def string_validator(field_name: str, min_length: Optional[int] = None, max_length: Optional[int] = None) -> Callable[[Any], Any]:
+    """Create a string validator function."""
+    def validator(value: Any) -> str:
+        v = Validator(field_name)
+        v.type_check(str)
+        if min_length is not None:
+            v.min_length(min_length)
+        if max_length is not None:
+            v.max_length(max_length)
+        v.validate(value)
+        return value
+    return validator
+
+
+def integer_validator(field_name: str, min_val: Optional[int] = None, max_val: Optional[int] = None) -> Callable[[Any], Any]:
+    """Create an integer validator function."""
+    def validator(value: Any) -> int:
+        v = Validator(field_name)
+        v.type_check(int)
+        if min_val is not None or max_val is not None:
+            v.range_check(min_val, max_val)
+        v.validate(value)
+        return value
+    return validator
+
+
+def float_validator(field_name: str, min_val: Optional[float] = None, max_val: Optional[float] = None) -> Callable[[Any], Any]:
+    """Create a float validator function."""
+    def validator(value: Any) -> float:
+        v = Validator(field_name)
+        v.type_check(float)
+        if min_val is not None or max_val is not None:
+            v.range_check(min_val, max_val)
+        v.validate(value)
+        return value
+    return validator
+
+
+def boolean_validator(field_name: str) -> Callable[[Any], Any]:
+    """Create a boolean validator function."""
+    def validator(value: Any) -> bool:
+        v = Validator(field_name)
+        v.type_check(bool)
+        v.validate(value)
+        return value
+    return validator
+
+
+def array_validator(field_name: str, item_validator: Optional[Callable] = None) -> Callable[[Any], Any]:
+    """Create an array validator function."""
+    def validator(value: Any) -> List[Any]:
+        v = Validator(field_name)
+        v.type_check(list)
+        v.validate(value)
+        if item_validator and value is not None:
+            return [item_validator(item) for item in value]
+        return value
+    return validator
+
+
+def object_validator(field_name: str) -> Callable[[Any], Any]:
+    """Create an object validator function."""
+    def validator(value: Any) -> Dict[str, Any]:
+        v = Validator(field_name)
+        v.type_check(dict)
+        v.validate(value)
+        return value
+    return validator
+
+
+def enum_validator(field_name: str, choices: List[Any]) -> Callable[[Any], Any]:
+    """Create an enum validator function."""
+    def validator(value: Any) -> Any:
+        v = Validator(field_name)
+        v.in_choices(choices)
+        v.validate(value)
+        return value
+    return validator
+
+
+def optional_validator(validator_func: Callable) -> Callable[[Any], Any]:
+    """Make a validator optional (allow None)."""
+    def wrapper(value: Any) -> Any:
+        if value is None:
+            return None
+        return validator_func(value)
+    return wrapper
+
+
+def required_validator(validator_func: Callable) -> Callable[[Any], Any]:
+    """Make a validator required (disallow None)."""
+    def wrapper(value: Any) -> Any:
+        if value is None:
+            raise ValidationError(field="value", constraint="Value is required")
+        return validator_func(value)
+    return wrapper
+
+
+def chain_validators(*validators: Callable) -> Callable[[Any], Any]:
+    """Chain multiple validators together."""
+    def wrapper(value: Any) -> Any:
+        result = value
+        for validator in validators:
+            result = validator(result)
+        return result
+    return wrapper
+
+
+# Export public API
+__all__ = [
+    'Validator',
+    'string_validator',
+    'integer_validator',
+    'float_validator',
+    'boolean_validator',
+    'array_validator',
+    'object_validator',
+    'enum_validator',
+    'optional_validator',
+    'required_validator',
+    'chain_validators',
+    'SchemaValidator',
+    'email_validator',
+    'url_validator',
+    'uuid_validator',
+    'session_id_validator',
+    'agent_id_validator',
+    'json_validator',
+    'file_path_validator',
+    'datetime_validator',
+    'port_validator',
+    'positive_integer_validator',
+    'non_negative_integer_validator',
+    'percentage_validator',
+    'create_session_schema',
+    'agent_task_schema',
+    'checkpoint_schema',
+    'analytics_query_schema',
+    'hook_registration_schema',
+    'validate_and_sanitize_input',
+    'create_validation_error_response',
+    'validate_prompt',
+    'validate_model',
+    'validate_session_id',
+]

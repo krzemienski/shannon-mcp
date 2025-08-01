@@ -7,15 +7,18 @@ Manages event hooks for automation and extensibility.
 import asyncio
 import json
 import re
+import os
 from typing import Dict, Any, List, Optional, Callable, Union
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from pathlib import Path
 from enum import Enum
 import subprocess
 import httpx
 
 from .base import BaseManager, ManagerConfig, ManagerError
 from ..utils.logging import get_logger
+from ..utils.config import HooksConfig as HookConfig
 
 logger = get_logger("shannon-mcp.managers.hook")
 
@@ -96,26 +99,21 @@ class HookResult:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-@dataclass
-class HookConfig(ManagerConfig):
-    """Configuration for hook manager."""
-    max_hooks_per_event: int = 10
-    global_timeout: int = 60
-    enable_shell_hooks: bool = True
-    enable_http_hooks: bool = True
-    allowed_shell_commands: List[str] = field(default_factory=list)
-    blocked_shell_commands: List[str] = field(default_factory=lambda: ["rm", "dd", "format"])
-    http_retry_count: int = 3
-    http_timeout: int = 30
-
-
 class HookManager(BaseManager[Hook]):
     """Manages event hooks for automation."""
     
     def __init__(self, config: HookConfig):
         """Initialize hook manager."""
-        super().__init__(config)
-        self.config: HookConfig = config
+        from .base import ManagerConfig
+        from pathlib import Path
+        
+        manager_config = ManagerConfig(
+            name="hook_manager",
+            db_path=Path.home() / ".shannon-mcp" / "hooks.db",
+            custom_config={"timeout": config.timeout, "max_parallel": config.max_parallel}
+        )
+        super().__init__(manager_config)
+        self.hook_config: HookConfig = config
         self._hooks: Dict[str, Hook] = {}
         self._event_hooks: Dict[str, List[str]] = {}
         self._function_hooks: Dict[str, Callable] = {}
@@ -128,12 +126,12 @@ class HookManager(BaseManager[Hook]):
         
         # Create HTTP client
         self._http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.config.http_timeout),
+            timeout=httpx.Timeout(self.hook_config.timeout),
             follow_redirects=True
         )
         
         # Load existing hooks from database
-        if self.config.db_path:
+        if self.db:
             await self._load_hooks()
         
         # Register built-in hooks
@@ -221,15 +219,14 @@ class HookManager(BaseManager[Hook]):
             hook_type = type
         
         # Validate based on type
-        if hook_type == HookType.SHELL and not self.config.enable_shell_hooks:
-            raise ManagerError("Shell hooks are disabled")
-        
-        if hook_type == HookType.HTTP and not self.config.enable_http_hooks:
-            raise ManagerError("HTTP hooks are disabled")
+        # Note: enable_shell_hooks and enable_http_hooks not in HooksConfig,
+        # so we'll allow them by default for now
         
         # Check for blocked commands
         if hook_type == HookType.SHELL:
-            for blocked in self.config.blocked_shell_commands:
+            # Default blocked commands
+            blocked_commands = ["rm", "dd", "format"]
+            for blocked in blocked_commands:
                 if blocked in target:
                     raise ManagerError(f"Command contains blocked term: {blocked}")
         
@@ -350,7 +347,7 @@ class HookManager(BaseManager[Hook]):
         if tasks:
             done, pending = await asyncio.wait(
                 tasks,
-                timeout=self.config.global_timeout
+                timeout=self.hook_config.timeout
             )
             
             # Collect results

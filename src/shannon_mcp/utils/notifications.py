@@ -639,6 +639,28 @@ def get_notification_system() -> EventBus:
     return get_event_bus()
 
 
+async def notify_event(name: str, data: Dict[str, Any], priority: EventPriority = EventPriority.NORMAL) -> None:
+    """Send an event notification (backward compatibility alias for emit)."""
+    # Infer category from event name
+    category = EventCategory.SYSTEM  # default
+    if name.startswith("session."):
+        category = EventCategory.SESSION
+    elif name.startswith("agent."):
+        category = EventCategory.AGENT
+    elif name.startswith("checkpoint."):
+        category = EventCategory.CHECKPOINT
+    elif name.startswith("hook."):
+        category = EventCategory.HOOKS
+    elif name.startswith("analytics."):
+        category = EventCategory.ANALYTICS
+    elif name.startswith("binary."):
+        category = EventCategory.BINARY
+    elif name.startswith("mcp."):
+        category = EventCategory.MCP
+    
+    await emit(name, category, data, priority=priority)
+
+
 class EventHandler:
     """Alias for Subscription for backward compatibility."""
     pass
@@ -661,4 +683,5 @@ __all__ = [
     'event_handler',
     'EventEmitter',
     'setup_notifications',
+    'notify_event',
 ]

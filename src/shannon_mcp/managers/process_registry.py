@@ -86,8 +86,9 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
     
     def __init__(self, config: ProcessRegistryConfig):
         """Initialize process registry manager."""
+        # ProcessRegistryConfig already extends ManagerConfig, so we can pass it directly
         super().__init__(config)
-        self.config: ProcessRegistryConfig = config
+        self.registry_config: ProcessRegistryConfig = config
         self._registry: Dict[str, RegisteredSession] = {}
         self._process_sessions: Dict[int, Set[str]] = {}
         self._lock_file: Optional[int] = None
@@ -99,11 +100,11 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         logger.info("Initializing process registry manager")
         
         # Create registry directory
-        Path(self.config.registry_path).mkdir(parents=True, exist_ok=True)
+        Path(self.registry_config.registry_path).mkdir(parents=True, exist_ok=True)
         
         # Create IPC socket directory
-        if self.config.enable_ipc:
-            Path(self.config.ipc_socket_dir).mkdir(parents=True, exist_ok=True)
+        if self.registry_config.enable_ipc:
+            Path(self.registry_config.ipc_socket_dir).mkdir(parents=True, exist_ok=True)
         
         # Acquire registry lock
         await self._acquire_registry_lock()
@@ -112,7 +113,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         await self._load_registry()
         
         # Start discovery service
-        if self.config.enable_discovery:
+        if self.registry_config.enable_discovery:
             await self._start_discovery_service()
     
     async def _start(self) -> None:
@@ -151,7 +152,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         stale_count = 0
         now = datetime.now(timezone.utc)
         for session in self._registry.values():
-            if (now - session.last_seen).total_seconds() > self.config.stale_threshold:
+            if (now - session.last_seen).total_seconds() > self.registry_config.stale_threshold:
                 stale_count += 1
         
         return {
@@ -159,8 +160,8 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
             "registered_sessions": len(self._registry),
             "unique_processes": len(self._process_sessions),
             "stale_sessions": stale_count,
-            "discovery_enabled": self.config.enable_discovery,
-            "ipc_enabled": self.config.enable_ipc
+            "discovery_enabled": self.registry_config.enable_discovery,
+            "ipc_enabled": self.registry_config.enable_ipc
         }
     
     async def _create_schema(self) -> None:
@@ -247,7 +248,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
             await self._persist_session(session)
         
         # Announce via discovery
-        if self.config.enable_discovery:
+        if self.registry_config.enable_discovery:
             await self._announce_session(session)
         
         logger.info(f"Registered session {session_id} from process {pid}")
@@ -354,7 +355,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         message: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Send IPC message to a session."""
-        if not self.config.enable_ipc:
+        if not self.registry_config.enable_ipc:
             raise ManagerError("IPC is disabled")
         
         session = self._registry.get(session_id)
@@ -389,7 +390,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
     async def cleanup_stale_sessions(self) -> int:
         """Clean up stale sessions."""
         now = datetime.now(timezone.utc)
-        threshold = timedelta(seconds=self.config.stale_threshold)
+        threshold = timedelta(seconds=self.registry_config.stale_threshold)
         
         stale_sessions = []
         for session_id, session in self._registry.items():
@@ -415,7 +416,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
     
     async def _acquire_registry_lock(self) -> None:
         """Acquire exclusive lock on registry."""
-        lock_path = Path(self.config.registry_path) / ".lock"
+        lock_path = Path(self.registry_config.registry_path) / ".lock"
         self._lock_file = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY)
         
         try:
@@ -433,7 +434,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
     
     async def _load_registry(self) -> None:
         """Load registry from file."""
-        registry_file = Path(self.config.registry_path) / "registry.json"
+        registry_file = Path(self.registry_config.registry_path) / "registry.json"
         
         if registry_file.exists():
             try:
@@ -477,7 +478,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
     
     async def _persist_registry(self) -> None:
         """Persist registry to file."""
-        registry_file = Path(self.config.registry_path) / "registry.json"
+        registry_file = Path(self.registry_config.registry_path) / "registry.json"
         
         data = {
             'version': '1.0',
@@ -498,7 +499,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         self._discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
         # Find available port in range
-        for port in range(*self.config.discovery_port_range):
+        for port in range(*self.registry_config.discovery_port_range):
             try:
                 self._discovery_socket.bind(('0.0.0.0', port))
                 self._discovery_port = port
@@ -547,7 +548,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         }
         
         # Broadcast to discovery port range
-        for port in range(*self.config.discovery_port_range):
+        for port in range(*self.registry_config.discovery_port_range):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.sendto(
@@ -568,7 +569,7 @@ class ProcessRegistryManager(BaseManager[RegisteredSession]):
         """Background task to clean up stale sessions."""
         while True:
             try:
-                await asyncio.sleep(self.config.cleanup_interval)
+                await asyncio.sleep(self.registry_config.cleanup_interval)
                 await self.cleanup_stale_sessions()
             except asyncio.CancelledError:
                 break

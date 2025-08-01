@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from .base import BaseManager, ManagerConfig, ManagerError
 from ..utils.logging import get_logger
+from ..utils.config import CheckpointConfig
 
 logger = get_logger("shannon-mcp.managers.checkpoint")
 
@@ -48,24 +49,21 @@ class Checkpoint:
         }
 
 
-@dataclass
-class CheckpointConfig(ManagerConfig):
-    """Configuration for checkpoint manager."""
-    max_checkpoints_per_session: int = 10
-    retention_days: int = 30
-    auto_checkpoint: bool = True
-    auto_checkpoint_interval: int = 300  # seconds
-    compression_enabled: bool = True
-    compression_level: int = 6
-
-
 class CheckpointManager(BaseManager[Checkpoint]):
     """Manages session checkpoints for state restoration."""
     
     def __init__(self, config: CheckpointConfig, cas=None):
         """Initialize checkpoint manager."""
-        super().__init__(config)
-        self.config: CheckpointConfig = config
+        from .base import ManagerConfig
+        from pathlib import Path
+        
+        manager_config = ManagerConfig(
+            name="checkpoint_manager",
+            db_path=config.storage_path / "checkpoints.db",
+            custom_config={"cleanup_age_days": config.cleanup_age_days, "auto_checkpoint_interval": config.auto_checkpoint_interval}
+        )
+        super().__init__(manager_config)
+        self.checkpoint_config: CheckpointConfig = config
         self.cas = cas  # Content-addressable storage
         self._checkpoints: Dict[str, Checkpoint] = {}
         self._session_checkpoints: Dict[str, List[str]] = {}
@@ -76,7 +74,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
         logger.info("Initializing checkpoint manager")
         
         # Load existing checkpoints from database
-        if self.config.db_path:
+        if self.checkpoint_config.storage_path:
             await self._load_checkpoints()
     
     async def _start(self) -> None:
@@ -154,9 +152,9 @@ class CheckpointManager(BaseManager[Checkpoint]):
         original_size = len(serialized)
         
         # Compress if enabled
-        if self.config.compression_enabled:
+        if self.checkpoint_config.compression_enabled:
             import zstandard as zstd
-            compressor = zstd.ZstdCompressor(level=self.config.compression_level)
+            compressor = zstd.ZstdCompressor(level=self.checkpoint_config.compression_level)
             compressed = compressor.compress(serialized)
             compression_ratio = original_size / len(compressed)
             data_to_store = compressed
@@ -293,7 +291,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
     
     async def cleanup_old_checkpoints(self) -> int:
         """Clean up checkpoints older than retention period."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.config.retention_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.checkpoint_config.cleanup_age_days)
         
         old_checkpoints = [
             cp for cp in self._checkpoints.values()
@@ -308,7 +306,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
     
     async def start_auto_checkpoint(self, session_id: str) -> None:
         """Start auto-checkpointing for a session."""
-        if not self.config.auto_checkpoint:
+        if not self.checkpoint_config.auto_checkpoint:
             return
         
         if session_id in self._auto_checkpoint_tasks:
@@ -317,7 +315,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
         async def auto_checkpoint_loop():
             while True:
                 try:
-                    await asyncio.sleep(self.config.auto_checkpoint_interval)
+                    await asyncio.sleep(self.checkpoint_config.auto_checkpoint_interval)
                     await self.create_checkpoint(
                         session_id,
                         name=f"Auto checkpoint",
@@ -353,7 +351,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
     
     async def _store_to_file(self, checkpoint_id: str, data: bytes) -> str:
         """Fallback file storage for checkpoints."""
-        path = Path(self.config.db_path).parent / "checkpoints" / f"{checkpoint_id}.ckpt"
+        path = Path(self.checkpoint_config.db_path).parent / "checkpoints" / f"{checkpoint_id}.ckpt"
         path.parent.mkdir(parents=True, exist_ok=True)
         
         import aiofiles
@@ -364,7 +362,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
     
     async def _retrieve_from_file(self, checkpoint_id: str) -> bytes:
         """Retrieve checkpoint from file storage."""
-        path = Path(self.config.db_path).parent / "checkpoints" / f"{checkpoint_id}.ckpt"
+        path = Path(self.checkpoint_config.db_path).parent / "checkpoints" / f"{checkpoint_id}.ckpt"
         
         import aiofiles
         async with aiofiles.open(path, 'rb') as f:
@@ -374,13 +372,13 @@ class CheckpointManager(BaseManager[Checkpoint]):
         """Clean up excess checkpoints for a session."""
         checkpoint_ids = self._session_checkpoints.get(session_id, [])
         
-        if len(checkpoint_ids) > self.config.max_checkpoints_per_session:
+        if len(checkpoint_ids) > self.checkpoint_config.max_checkpoints:
             # Get checkpoints sorted by creation time
             checkpoints = [self._checkpoints[cid] for cid in checkpoint_ids]
             checkpoints.sort(key=lambda c: c.created_at)
             
             # Delete oldest checkpoints
-            to_delete = len(checkpoints) - self.config.max_checkpoints_per_session
+            to_delete = len(checkpoints) - self.checkpoint_config.max_checkpoints
             for checkpoint in checkpoints[:to_delete]:
                 await self.delete_checkpoint(checkpoint.id)
     

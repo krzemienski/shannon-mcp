@@ -49,6 +49,8 @@ class ErrorCategory(Enum):
     EXTERNAL_SERVICE = "external_service"
     USER_INPUT = "user_input"
     INTERNAL = "internal"
+    PROTOCOL = "protocol"
+    RUNTIME = "runtime"
     UNKNOWN = "unknown"
 
 
@@ -270,18 +272,27 @@ class ValidationError(ShannonError):
     category = ErrorCategory.VALIDATION
     severity = ErrorSeverity.WARNING
     
-    def __init__(self, field: str, value: Any, constraint: str, **kwargs):
+    def __init__(self, field: Optional[str] = None, value: Any = None, constraint: Optional[str] = None, message: Optional[str] = None, **kwargs):
         self.field = field
         self.value = value
         self.constraint = constraint
-        message = f"Validation failed for field '{field}': {constraint}"
-        super().__init__(message, **kwargs)
+        
+        if message:
+            error_message = message
+        elif field and constraint:
+            error_message = f"Validation failed for field '{field}': {constraint}"
+        else:
+            error_message = self.default_message
+            
+        super().__init__(error_message, **kwargs)
     
     def get_suggestions(self) -> List[str]:
-        return [
-            f"Check the value of field '{self.field}'",
-            f"Ensure it meets the constraint: {self.constraint}"
-        ]
+        if self.field and self.constraint:
+            return [
+                f"Check the value of field '{self.field}'",
+                f"Ensure it meets the constraint: {self.constraint}"
+            ]
+        return []
 
 
 # Authentication/Authorization Errors
@@ -308,8 +319,77 @@ class MCPError(ShannonError):
     """MCP protocol-related errors."""
     code = "MCP_ERROR"
     default_message = "MCP protocol error"
-    category = ErrorCategory.EXTERNAL_SERVICE
+    category = ErrorCategory.PROTOCOL
     severity = ErrorSeverity.ERROR
+
+
+class ShannonMCPError(MCPError):
+    """Shannon MCP specific errors (alias for backward compatibility)."""
+    pass
+
+
+class SessionNotFoundError(ShannonError):
+    """Session not found error."""
+    code = "SESSION_NOT_FOUND"
+    default_message = "Session not found"
+    category = ErrorCategory.VALIDATION
+    
+    def __init__(self, session_id: str, **kwargs):
+        message = f"Session not found: {session_id}"
+        super().__init__(message, session_id=session_id, **kwargs)
+
+
+class AgentNotFoundError(ShannonError):
+    """Agent not found error."""
+    code = "AGENT_NOT_FOUND"
+    default_message = "Agent not found"
+    category = ErrorCategory.VALIDATION
+    
+    def __init__(self, agent_id: str, **kwargs):
+        message = f"Agent not found: {agent_id}"
+        super().__init__(message, agent_id=agent_id, **kwargs)
+
+
+class BinaryNotFoundError(ShannonError):
+    """Binary not found error."""
+    code = "BINARY_NOT_FOUND"
+    default_message = "Binary not found"
+    category = ErrorCategory.SYSTEM
+    
+    def __init__(self, binary_name: str = "Claude Code", **kwargs):
+        message = f"{binary_name} binary not found"
+        super().__init__(message, binary_name=binary_name, **kwargs)
+    
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Install Claude Code from claude.ai/code",
+            "Check PATH environment variable",
+            "Specify binary path in configuration"
+        ]
+
+
+class InvalidRequestError(ValidationError):
+    """Invalid request error."""
+    code = "INVALID_REQUEST"
+    default_message = "Invalid request"
+
+
+class RateLimitError(ShannonError):
+    """Rate limit exceeded error."""
+    code = "RATE_LIMIT_EXCEEDED"
+    default_message = "Rate limit exceeded"
+    category = ErrorCategory.EXTERNAL_SERVICE
+    is_retryable = True
+    
+    def __init__(self, limit: int, window: str, retry_after: Optional[int] = None, **kwargs):
+        self.limit = limit
+        self.window = window
+        self._retry_after = retry_after
+        message = f"Rate limit exceeded: {limit} requests per {window}"
+        super().__init__(message, limit=limit, window=window, **kwargs)
+    
+    def get_retry_after(self) -> Optional[int]:
+        return self._retry_after or 60  # Default 60 seconds
 
 
 class StreamError(ShannonError):
@@ -597,6 +677,12 @@ __all__ = [
     'AuthenticationError',
     'AuthorizationError',
     'MCPError',
+    'ShannonMCPError',
+    'SessionNotFoundError',
+    'AgentNotFoundError',
+    'BinaryNotFoundError',
+    'InvalidRequestError',
+    'RateLimitError',
     'StreamError',
     'ExternalServiceError',
     

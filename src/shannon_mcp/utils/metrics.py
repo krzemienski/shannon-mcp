@@ -508,3 +508,62 @@ def json_file_reporter(file_path: str):
             json.dump(metrics, f, indent=2)
     
     return reporter
+
+
+# Convenience function for tracking operations
+def track_operation(operation: str, success: bool = True, duration: Optional[float] = None, tags: Optional[Dict[str, str]] = None) -> None:
+    """Track an operation with optional success status and duration."""
+    operation_tags = tags or {}
+    operation_tags['operation'] = operation
+    operation_tags['success'] = str(success).lower()
+    
+    # Count the operation
+    counter(f"operations.{operation}", 1, operation_tags)
+    
+    # Track duration if provided
+    if duration is not None:
+        timer(f"operations.{operation}.duration", duration, operation_tags)
+    
+    # Track success/failure
+    if success:
+        counter(f"operations.{operation}.success", 1, operation_tags)
+    else:
+        counter(f"operations.{operation}.failure", 1, operation_tags)
+
+
+# Export public API
+__all__ = [
+    'MetricType',
+    'MetricPoint',
+    'MetricsCollector',
+    'TimingContext',
+    'AsyncTimingContext',
+    'counter',
+    'gauge',
+    'histogram',
+    'timer',
+    'timing',
+    'async_timing',
+    'increment',
+    'decrement',
+    'set_add',
+    'get_metrics',
+    'reset_metrics',
+    'track_calls',
+    'track_duration',
+    'track_errors',
+    'track_all',
+    'track_session_metric',
+    'track_agent_metric',
+    'track_tool_usage',
+    'track_resource_access',
+    'track_error',
+    'track_performance',
+    'track_memory_usage',
+    'track_queue_size',
+    'track_connection_count',
+    'track_operation',
+    'MetricsReporter',
+    'console_reporter',
+    'json_file_reporter',
+]
