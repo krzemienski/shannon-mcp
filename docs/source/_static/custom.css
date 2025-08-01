@@ -1,0 +1,105 @@
+/* Custom CSS for Shannon MCP documentation */
+
+/* Improve code block styling */
+.highlight {
+    background: #f8f8f8 !important;
+    border: 1px solid #e1e4e8;
+    border-radius: 6px;
+    margin: 1em 0;
+}
+
+.highlight pre {
+    padding: 16px;
+    overflow: auto;
+    font-size: 85%;
+    line-height: 1.45;
+}
+
+/* Better table styling */
+.wy-table-responsive table td {
+    white-space: normal !important;
+}
+
+.wy-table thead th {
+    background-color: #2980b9;
+    color: white;
+}
+
+/* Improve admonition styling */
+.admonition {
+    border-radius: 6px;
+    border-left: 4px solid;
+    padding: 12px;
+    margin: 1em 0;
+}
+
+.admonition.note {
+    border-left-color: #2980b9;
+    background-color: #e7f2fa;
+}
+
+.admonition.warning {
+    border-left-color: #f0ad4e;
+    background-color: #fcf8e3;
+}
+
+.admonition.tip {
+    border-left-color: #5cb85c;
+    background-color: #dff0d8;
+}
+
+/* API reference improvements */
+.class {
+    margin-top: 2em;
+    padding-top: 1em;
+    border-top: 1px solid #e1e4e8;
+}
+
+.method {
+    margin: 1em 0;
+    padding: 0.5em;
+    background-color: #f6f8fa;
+    border-radius: 4px;
+}
+
+/* Improve navigation */
+.wy-nav-content {
+    max-width: 1200px;
+}
+
+.wy-side-nav-search {
+    background-color: #2980b9;
+}
+
+.wy-side-nav-search > a {
+    font-size: 1.2em;
+    font-weight: bold;
+}
+
+/* Better inline code */
+code.literal {
+    background-color: #f0f0f0;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 90%;
+}
+
+/* Improve parameter lists */
+.field-list {
+    margin: 1em 0;
+}
+
+.field-name {
+    font-weight: bold;
+    min-width: 120px;
+}
+
+/* Copy button positioning */
+.highlight button.copybtn {
+    opacity: 0.3;
+    transition: opacity 0.3s;
+}
+
+.highlight:hover button.copybtn {
+    opacity: 1;
+}
