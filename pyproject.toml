@@ -15,7 +15,7 @@ watchdog = "^4.0.0"
 zstandard = "^0.22.0"
 click = "^8.1.0"
 pydantic = "^2.0.0"
-httpx = "^0.27.0"
+httpx = "^0.28.1"
 psutil = "^5.9.0"
 semantic-version = "^2.10.0"
 json-stream = "^2.3.0"
@@ -26,6 +26,7 @@ structlog = "^24.0.0"
 sentry-sdk = "^2.0.0"
 toml = "^0.10.2"
 aiohttp = "^3.9.0"
+fastmcp = "^2.10.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
@@ -41,6 +42,8 @@ pre-commit = "^3.3.0"
 
 [tool.poetry.scripts]
 shannon-mcp = "shannon_mcp.server:main"
+shannon-mcp-fastmcp = "shannon_mcp.server_fastmcp:main"
+shannon-mcp-production = "shannon_mcp.server_fastmcp_production:main"
 
 [build-system]
 requires = ["poetry-core"]
