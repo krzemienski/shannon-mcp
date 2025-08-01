@@ -12,6 +12,7 @@ This module provides centralized logging setup with:
 import logging
 import logging.handlers
 import sys
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
 import json
@@ -28,7 +29,15 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 install_rich_traceback()
 
 # Console for rich output
-console = Console()
+# Check if running as MCP server (stdio mode)
+import os
+mcp_mode = os.environ.get('SHANNON_MCP_MODE') == 'stdio'
+
+# Configure console to use stderr for MCP mode
+console = Console(
+    file=sys.stderr if mcp_mode else sys.stdout,
+    force_terminal=not mcp_mode  # Disable terminal formatting in MCP mode
+)
 
 
 class JSONFormatter(logging.Formatter):
@@ -150,21 +159,23 @@ def setup_logging(
         root_logger.removeHandler(handler)
     
     # Console handler with rich formatting
-    console_handler = RichHandler(
-        console=console,
-        show_time=True,
-        show_path=True,
-        rich_tracebacks=True,
-        tracebacks_show_locals=True,
-        tracebacks_suppress=[
-            "click",
-            "asyncio",
-        ]
-    )
-    console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter('%(message)s')
-    console_handler.setFormatter(console_formatter)
-    root_logger.addHandler(console_handler)
+    # Only add console handler if not in MCP stdio mode
+    if not mcp_mode:
+        console_handler = RichHandler(
+            console=console,
+            show_time=True,
+            show_path=True,
+            rich_tracebacks=True,
+            tracebacks_show_locals=True,
+            tracebacks_suppress=[
+                "click",
+                "asyncio",
+            ]
+        )
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_formatter)
+        root_logger.addHandler(console_handler)
     
     # File handler with rotation
     file_handler = logging.handlers.RotatingFileHandler(

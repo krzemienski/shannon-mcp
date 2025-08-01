@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+import click
+
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.types import Tool, Resource, TextContent
@@ -20,11 +22,12 @@ from .managers.session import SessionManager, SessionState
 from .managers.agent import AgentManager, TaskRequest
 from .managers.mcp_server import MCPServerManager
 from .utils.config import load_config, get_config, ShannonConfig
-from .utils.logging import setup_logging
+from .utils.logging import setup_logging, get_logger
 from .utils.notifications import setup_notifications
 
 # Setup logging
-logger = setup_logging("shannon-mcp.server")
+setup_logging("shannon-mcp.server")
+logger = get_logger("shannon-mcp.server")
 
 
 class ShannonMCPServer:
@@ -35,25 +38,222 @@ class ShannonMCPServer:
         self.managers: Dict[str, Any] = {}
         self.initialized = False
         self.server = Server("shannon-mcp")
+        self.tool_handlers: Dict[str, Any] = {}
+        self.resource_handlers: Dict[str, Any] = {}
         
         # Register handlers
         self._register_handlers()
         
     def _register_handlers(self):
         """Register MCP handlers."""
-        # Tools
-        self.server.add_tool(self._find_claude_binary_tool())
-        self.server.add_tool(self._create_session_tool())
-        self.server.add_tool(self._send_message_tool())
-        self.server.add_tool(self._cancel_session_tool())
-        self.server.add_tool(self._list_sessions_tool())
-        self.server.add_tool(self._list_agents_tool())
-        self.server.add_tool(self._assign_task_tool())
+        # Register tool list handler
+        @self.server.list_tools()
+        async def handle_list_tools() -> List[Tool]:
+            """Return available tools."""
+            logger.info("[DEBUG] handle_list_tools called")
+            return [
+                self._find_claude_binary_tool(),
+                self._create_session_tool(),
+                self._send_message_tool(),
+                self._cancel_session_tool(),
+                self._list_sessions_tool(),
+                self._list_agents_tool(),
+                self._assign_task_tool()
+            ]
         
-        # Resources
-        self.server.add_resource(self._config_resource())
-        self.server.add_resource(self._agents_resource())
-        self.server.add_resource(self._sessions_resource())
+        # Register tool handlers
+        self._setup_tool_handlers()
+        
+        # Register tool call handler
+        @self.server.call_tool()
+        async def handle_call_tool(name: str, arguments: dict) -> Any:
+            """Handle tool calls."""
+            logger.info(f"[DEBUG] Tool call received: {name} with args: {arguments}")
+            
+            if name not in self.tool_handlers:
+                logger.error(f"[DEBUG] Unknown tool: {name}")
+                raise ValueError(f"Unknown tool: {name}")
+            
+            handler = self.tool_handlers[name]
+            logger.info(f"[DEBUG] Calling handler for {name}")
+            
+            try:
+                result = await handler(**arguments)
+                logger.info(f"[DEBUG] Tool {name} returned: {result}")
+                return result
+            except Exception as e:
+                logger.error(f"[DEBUG] Tool {name} failed: {e}", exc_info=True)
+                raise
+        
+        # Register resource handlers
+        @self.server.list_resources()
+        async def handle_list_resources() -> List[Resource]:
+            """Return available resources."""
+            logger.info("[DEBUG] handle_list_resources called")
+            return [
+                self._config_resource(),
+                self._agents_resource(),
+                self._sessions_resource()
+            ]
+        
+        # Register resource handlers
+        self._setup_resource_handlers()
+        
+        @self.server.read_resource()
+        async def handle_read_resource(uri: str) -> str:
+            """Read a resource."""
+            logger.info(f"[DEBUG] Resource read requested: {uri}")
+            
+            if uri not in self.resource_handlers:
+                logger.error(f"[DEBUG] Unknown resource: {uri}")
+                raise ValueError(f"Unknown resource: {uri}")
+            
+            handler = self.resource_handlers[uri]
+            
+            try:
+                content = await handler()
+                logger.info(f"[DEBUG] Resource {uri} returned content length: {len(content)}")
+                return TextContent(type="text", text=content)
+            except Exception as e:
+                logger.error(f"[DEBUG] Resource {uri} failed: {e}", exc_info=True)
+                raise
+    
+    def _setup_tool_handlers(self):
+        """Set up tool handlers."""
+        # Find Claude binary
+        async def find_claude_binary_handler() -> Dict[str, Any]:
+            logger.info("[DEBUG] Handler: find_claude_binary called")
+            await self.initialize()
+            logger.info("[DEBUG] Handler: Calling binary manager discover_binary")
+            binary_info = await self.managers['binary'].discover_binary()
+            result = binary_info.to_dict() if binary_info else {"error": "Claude Code not found"}
+            logger.info(f"[DEBUG] Handler: find_claude_binary result: {result}")
+            return result
+        
+        # Create session
+        async def create_session_handler(
+            prompt: str,
+            model: str = "claude-3-sonnet",
+            checkpoint_id: Optional[str] = None,
+            context: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]:
+            logger.info(f"[DEBUG] Handler: create_session called with prompt='{prompt}', model='{model}'")
+            await self.initialize()
+            logger.info("[DEBUG] Handler: Creating session via session manager")
+            session = await self.managers['session'].create_session(
+                prompt=prompt,
+                model=model,
+                checkpoint_id=checkpoint_id,
+                context=context
+            )
+            result = session.to_dict()
+            logger.info(f"[DEBUG] Handler: create_session result: {result}")
+            return result
+        
+        # Send message
+        async def send_message_handler(
+            session_id: str,
+            content: str,
+            timeout: Optional[float] = None
+        ) -> Dict[str, Any]:
+            await self.initialize()
+            response = await self.managers['session'].send_message(
+                session_id=session_id,
+                content=content,
+                timeout=timeout
+            )
+            return response
+        
+        # Cancel session
+        async def cancel_session_handler(session_id: str) -> Dict[str, Any]:
+            await self.initialize()
+            await self.managers['session'].cancel_session(session_id)
+            return {"status": "cancelled", "session_id": session_id}
+        
+        # List sessions
+        async def list_sessions_handler(
+            state: Optional[str] = None,
+            limit: int = 100
+        ) -> Dict[str, Any]:
+            await self.initialize()
+            sessions = await self.managers['session'].list_sessions(
+                state=SessionState[state.upper()] if state else None,
+                limit=limit
+            )
+            return {"sessions": [s.to_dict() for s in sessions]}
+        
+        # List agents
+        async def list_agents_handler(
+            category: Optional[str] = None,
+            status: Optional[str] = None,
+            capability: Optional[str] = None
+        ) -> Dict[str, Any]:
+            await self.initialize()
+            agents = await self.managers['agent'].list_agents(
+                category=category,
+                status=status,
+                capability=capability
+            )
+            return {"agents": agents}
+        
+        # Assign task
+        async def assign_task_handler(
+            description: str,
+            required_capabilities: List[str],
+            priority: int = 5,
+            context: Optional[Dict[str, Any]] = None,
+            timeout: Optional[int] = None
+        ) -> Dict[str, Any]:
+            await self.initialize()
+            task_request = TaskRequest(
+                description=description,
+                required_capabilities=required_capabilities,
+                priority=priority,
+                context=context or {},
+                timeout=timeout
+            )
+            assignment = await self.managers['agent'].assign_task(task_request)
+            return assignment.to_dict()
+        
+        # Store handlers
+        self.tool_handlers = {
+            "find_claude_binary": find_claude_binary_handler,
+            "create_session": create_session_handler,
+            "send_message": send_message_handler,
+            "cancel_session": cancel_session_handler,
+            "list_sessions": list_sessions_handler,
+            "list_agents": list_agents_handler,
+            "assign_task": assign_task_handler
+        }
+    
+    def _setup_resource_handlers(self):
+        """Set up resource handlers."""
+        # Config resource
+        async def config_handler() -> str:
+            await self.initialize()
+            return json.dumps(self.config.to_dict() if self.config else {}, indent=2)
+        
+        # Agents resource
+        async def agents_handler() -> str:
+            await self.initialize()
+            agents = await self.managers['agent'].list_agents()
+            return json.dumps({"agents": agents}, indent=2)
+        
+        # Sessions resource
+        async def sessions_handler() -> str:
+            await self.initialize()
+            sessions = await self.managers['session'].list_sessions()
+            return json.dumps(
+                {"sessions": [s.to_dict() for s in sessions]},
+                indent=2
+            )
+        
+        # Store handlers
+        self.resource_handlers = {
+            "shannon://config": config_handler,
+            "shannon://agents": agents_handler,
+            "shannon://sessions": sessions_handler
+        }
     
     async def initialize(self):
         """Initialize all manager components."""
@@ -101,11 +301,6 @@ class ShannonMCPServer:
     
     def _find_claude_binary_tool(self) -> Tool:
         """Create find_claude_binary tool."""
-        async def handler() -> Dict[str, Any]:
-            await self.initialize()
-            binary_info = await self.managers['binary'].discover_binary()
-            return binary_info.to_dict() if binary_info else {"error": "Claude Code not found"}
-        
         return Tool(
             name="find_claude_binary",
             description="Discover Claude Code installation on the system",
@@ -114,26 +309,10 @@ class ShannonMCPServer:
                 "properties": {},
                 "required": []
             },
-            handler=handler
         )
     
     def _create_session_tool(self) -> Tool:
         """Create session tool."""
-        async def handler(
-            prompt: str,
-            model: str = "claude-3-sonnet",
-            checkpoint_id: Optional[str] = None,
-            context: Optional[Dict[str, Any]] = None
-        ) -> Dict[str, Any]:
-            await self.initialize()
-            session = await self.managers['session'].create_session(
-                prompt=prompt,
-                model=model,
-                checkpoint_id=checkpoint_id,
-                context=context
-            )
-            return session.to_dict()
-        
         return Tool(
             name="create_session",
             description="Create a new Claude Code session",
@@ -147,24 +326,10 @@ class ShannonMCPServer:
                 },
                 "required": ["prompt"]
             },
-            handler=handler
         )
     
     def _send_message_tool(self) -> Tool:
         """Create send message tool."""
-        async def handler(
-            session_id: str,
-            content: str,
-            timeout: Optional[float] = None
-        ) -> Dict[str, Any]:
-            await self.initialize()
-            await self.managers['session'].send_message(
-                session_id=session_id,
-                content=content,
-                timeout=timeout
-            )
-            return {"success": True}
-        
         return Tool(
             name="send_message",
             description="Send a message to an active session",
@@ -177,16 +342,10 @@ class ShannonMCPServer:
                 },
                 "required": ["session_id", "content"]
             },
-            handler=handler
         )
     
     def _cancel_session_tool(self) -> Tool:
         """Create cancel session tool."""
-        async def handler(session_id: str) -> Dict[str, Any]:
-            await self.initialize()
-            await self.managers['session'].cancel_session(session_id)
-            return {"success": True}
-        
         return Tool(
             name="cancel_session",
             description="Cancel a running session",
@@ -197,23 +356,10 @@ class ShannonMCPServer:
                 },
                 "required": ["session_id"]
             },
-            handler=handler
         )
     
     def _list_sessions_tool(self) -> Tool:
         """Create list sessions tool."""
-        async def handler(
-            state: Optional[str] = None,
-            limit: int = 100
-        ) -> List[Dict[str, Any]]:
-            await self.initialize()
-            session_state = SessionState(state) if state else None
-            sessions = await self.managers['session'].list_sessions(
-                state=session_state,
-                limit=limit
-            )
-            return [s.to_dict() for s in sessions]
-        
         return Tool(
             name="list_sessions",
             description="List active sessions",
@@ -225,24 +371,10 @@ class ShannonMCPServer:
                 },
                 "required": []
             },
-            handler=handler
         )
     
     def _list_agents_tool(self) -> Tool:
         """Create list agents tool."""
-        async def handler(
-            category: Optional[str] = None,
-            status: Optional[str] = None,
-            capability: Optional[str] = None
-        ) -> List[Dict[str, Any]]:
-            await self.initialize()
-            agents = await self.managers['agent'].list_agents(
-                category=category,
-                status=status,
-                capability=capability
-            )
-            return [a.to_dict() for a in agents]
-        
         return Tool(
             name="list_agents",
             description="List available AI agents",
@@ -255,36 +387,10 @@ class ShannonMCPServer:
                 },
                 "required": []
             },
-            handler=handler
         )
     
     def _assign_task_tool(self) -> Tool:
         """Create assign task tool."""
-        async def handler(
-            description: str,
-            required_capabilities: List[str],
-            priority: str = "medium",
-            context: Optional[Dict[str, Any]] = None,
-            timeout: Optional[int] = None
-        ) -> Dict[str, Any]:
-            await self.initialize()
-            request = TaskRequest(
-                id="",  # Will be auto-generated
-                description=description,
-                required_capabilities=required_capabilities,
-                priority=priority,
-                context=context or {},
-                timeout=timeout
-            )
-            assignment = await self.managers['agent'].assign_task(request)
-            return {
-                "task_id": assignment.task_id,
-                "agent_id": assignment.agent_id,
-                "score": assignment.score,
-                "estimated_duration": assignment.estimated_duration,
-                "confidence": assignment.confidence
-            }
-        
         return Tool(
             name="assign_task",
             description="Assign a task to an AI agent",
@@ -303,58 +409,42 @@ class ShannonMCPServer:
                 },
                 "required": ["description", "required_capabilities"]
             },
-            handler=handler
         )
     
     # Resource implementations
     
     def _config_resource(self) -> Resource:
         """Create config resource."""
-        async def handler(uri: str) -> str:
-            await self.initialize()
-            return json.dumps(self.config.dict(), indent=2)
-        
         return Resource(
             uri="shannon://config",
             name="Shannon MCP Configuration",
             description="Current configuration settings",
             mimeType="application/json",
-            handler=handler
         )
     
     def _agents_resource(self) -> Resource:
         """Create agents resource."""
-        async def handler(uri: str) -> str:
-            await self.initialize()
-            agents = await self.managers['agent'].list_agents()
-            return json.dumps([a.to_dict() for a in agents], indent=2)
-        
         return Resource(
             uri="shannon://agents",
             name="Available Agents",
             description="List of AI agents",
             mimeType="application/json",
-            handler=handler
         )
     
     def _sessions_resource(self) -> Resource:
         """Create sessions resource."""
-        async def handler(uri: str) -> str:
-            await self.initialize()
-            sessions = await self.managers['session'].list_sessions()
-            return json.dumps([s.to_dict() for s in sessions], indent=2)
-        
         return Resource(
             uri="shannon://sessions",
             name="Active Sessions",
             description="List of active Claude Code sessions",
             mimeType="application/json",
-            handler=handler
         )
     
     async def run(self):
         """Run the MCP server."""
         try:
+            logger.info("[DEBUG] Starting Shannon MCP Server run()")
+            
             # Initialize server
             await self.initialize()
             
@@ -365,8 +455,11 @@ class ShannonMCPServer:
                 capabilities={}
             )
             
+            logger.info(f"[DEBUG] Server initialized with version: {init_options.server_version}")
+            
             # Run server
             async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+                logger.info("[DEBUG] Starting stdio server communication")
                 await self.server.run(
                     read_stream,
                     write_stream,
@@ -383,10 +476,23 @@ class ShannonMCPServer:
 server_instance = ShannonMCPServer()
 
 
-# Main entry point
-def main():
-    """Main entry point for the MCP server."""
+# CLI commands
+@click.command()
+@click.version_option(version="0.1.0", prog_name="shannon-mcp")
+@click.option("--test", is_flag=True, help="Test server configuration")
+@click.option("--config", type=click.Path(exists=True), help="Path to configuration file")
+def main(test: bool, config: Optional[str]):
+    """Shannon MCP Server - Claude Code Integration.
+    
+    This server provides an MCP interface for Claude Code CLI operations.
+    """
     import sys
+    
+    if test:
+        click.echo("Testing Shannon MCP Server configuration...")
+        # Run test mode
+        asyncio.run(test_server())
+        return
     
     # Setup asyncio event loop
     if sys.platform == "win32":
@@ -394,11 +500,44 @@ def main():
     
     # Run the MCP server
     try:
+        logger.info("Starting Shannon MCP Server...")
         asyncio.run(server_instance.run())
     except KeyboardInterrupt:
         logger.info("Received interrupt signal")
     except Exception as e:
         logger.error(f"Server error: {e}", exc_info=True)
+        sys.exit(1)
+
+
+async def test_server():
+    """Test server configuration and connectivity."""
+    try:
+        server = ShannonMCPServer()
+        await server.initialize()
+        
+        click.echo("✓ Server initialization successful")
+        config_path = Path.home() / ".shannon-mcp" / "config.yaml"
+        click.echo(f"✓ Configuration loaded from: {config_path if config_path.exists() else 'default'}")
+        
+        # Test binary discovery
+        binary_info = await server.managers['binary'].discover_binary()
+        if binary_info:
+            click.echo(f"✓ Claude Code binary found at: {binary_info.path}")
+            click.echo(f"  Version: {binary_info.version}")
+        else:
+            click.echo("✗ Claude Code binary not found")
+        
+        # Test database connections
+        for name, manager in server.managers.items():
+            health = await manager.health_check()
+            status = "✓" if health.is_healthy else "✗"
+            click.echo(f"{status} {name} manager: {health.status}")
+        
+        await server.shutdown()
+        click.echo("\nServer test completed successfully!")
+        
+    except Exception as e:
+        click.echo(f"\nServer test failed: {e}", err=True)
         sys.exit(1)
 
 

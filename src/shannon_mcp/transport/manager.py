@@ -10,7 +10,7 @@ from .stdio import StdioTransport
 from .process_stdio import ProcessStdioTransport
 from .sse import SSETransport
 from ..utils.logging import get_logger
-from ..utils.notifications import NotificationCenter, NotificationType
+from ..utils.notifications import EventBus, EventCategory, EventPriority, emit
 
 logger = get_logger(__name__)
 
@@ -22,11 +22,11 @@ class TransportManager:
     provides unified interface for message handling.
     """
     
-    def __init__(self, notification_center: Optional[NotificationCenter] = None):
+    def __init__(self, event_bus: Optional[EventBus] = None):
         self._transports: Dict[str, Transport] = {}
         self._primary_transport: Optional[str] = None
         self._message_handlers: Dict[str, Callable] = {}
-        self._notification_center = notification_center or NotificationCenter()
+        self._event_bus = event_bus or EventBus()
         self._stats = {
             "total_connections": 0,
             "active_connections": 0,
@@ -268,10 +268,10 @@ class TransportManager:
     async def _handle_transport_error(self, error: Exception) -> None:
         """Handle transport error"""
         self._stats["total_errors"] += 1
-        await self._notification_center.notify(
-            NotificationType.ERROR,
-            f"Transport error: {error}",
-            {"error": str(error)}
+        await self._event_bus.emit(
+            "transport_error",
+            EventCategory.ERROR,
+            {"error": str(error), "message": f"Transport error: {error}"}
         )
         
     async def _handle_transport_connect(self, name: str) -> None:
@@ -282,10 +282,10 @@ class TransportManager:
             if t.state == ConnectionState.CONNECTED
         )
         
-        await self._notification_center.notify(
-            NotificationType.LIFECYCLE,
-            f"Transport connected: {name}",
-            {"transport": name}
+        await self._event_bus.emit(
+            "transport_connected",
+            EventCategory.LIFECYCLE,
+            {"transport": name, "message": f"Transport connected: {name}"}
         )
         
     async def _handle_transport_close(self, name: str) -> None:
@@ -295,10 +295,10 @@ class TransportManager:
             if t.state == ConnectionState.CONNECTED
         )
         
-        await self._notification_center.notify(
-            NotificationType.LIFECYCLE,
-            f"Transport disconnected: {name}",
-            {"transport": name}
+        await self._event_bus.emit(
+            "transport_disconnected",
+            EventCategory.LIFECYCLE,
+            {"transport": name, "message": f"Transport disconnected: {name}"}
         )
         
     @asynccontextmanager

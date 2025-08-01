@@ -247,6 +247,20 @@ class DatabaseIntegrityError(DatabaseError):
     severity = ErrorSeverity.CRITICAL
 
 
+# Cache Errors
+
+class CacheError(ShannonError):
+    """Cache-related errors."""
+    code = "CACHE_ERROR"
+    default_message = "Cache error occurred"
+    category = ErrorCategory.DATABASE
+    severity = ErrorSeverity.WARNING
+    is_retryable = True
+    
+    def get_retry_after(self) -> Optional[int]:
+        return 2  # 2 seconds
+
+
 # Validation Errors
 
 class ValidationError(ShannonError):
@@ -286,6 +300,25 @@ class AuthorizationError(ShannonError):
     default_message = "Authorization failed"
     category = ErrorCategory.AUTHORIZATION
     severity = ErrorSeverity.WARNING
+
+
+# MCP Protocol Errors
+
+class MCPError(ShannonError):
+    """MCP protocol-related errors."""
+    code = "MCP_ERROR"
+    default_message = "MCP protocol error"
+    category = ErrorCategory.EXTERNAL_SERVICE
+    severity = ErrorSeverity.ERROR
+
+
+class StreamError(ShannonError):
+    """Stream processing errors."""
+    code = "STREAM_ERROR"
+    default_message = "Stream processing error"
+    category = ErrorCategory.NETWORK
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
 
 
 # External Service Errors
@@ -559,9 +592,12 @@ __all__ = [
     'DatabaseError',
     'DatabaseConnectionError',
     'DatabaseIntegrityError',
+    'CacheError',
     'ValidationError',
     'AuthenticationError',
     'AuthorizationError',
+    'MCPError',
+    'StreamError',
     'ExternalServiceError',
     
     # Utilities
