@@ -34,11 +34,18 @@ async def find_claude_binary() -> Dict[str, Any]:
     """Discover Claude Code installation."""
     if state.binary_found:
         return {
-            "path": "/usr/local/bin/claude-code",
-            "version": "0.1.0-test",
-            "capabilities": ["session", "agent", "checkpoint"]
+            "status": "found",
+            "binary": {
+                "path": "/usr/local/bin/claude-code",
+                "version": "0.1.0-test",
+                "capabilities": ["session", "agent", "checkpoint"]
+            }
         }
-    return {"error": "Claude Code not found"}
+    return {
+        "status": "not_found", 
+        "error": "Claude Code not found",
+        "suggestions": ["Install from claude.ai/code"]
+    }
 
 
 @mcp.tool()
