@@ -39,6 +39,7 @@ from ..utils.logging import get_logger
 from .cache import SessionCache
 from .message_filter import MessageFilterManager, MessageFilter, FilterType, FilterProfile
 from .tool_result_handler import ToolResultHandler, ToolResult, ToolCategory
+from .timeline import TimelineManager, CheckpointStrategy
 
 
 logger = get_logger("shannon-mcp.session")
@@ -367,7 +368,7 @@ class Session:
 class SessionManager(BaseManager[Session]):
     """Manages Claude Code sessions."""
     
-    def __init__(self, config: SessionManagerConfig, binary_manager: BinaryManager):
+    def __init__(self, config: SessionManagerConfig, binary_manager: BinaryManager, checkpoint_manager=None):
         """Initialize session manager."""
         manager_config = ManagerConfig(
             name="session_manager",
@@ -378,6 +379,7 @@ class SessionManager(BaseManager[Session]):
         
         self.session_config = config
         self.binary_manager = binary_manager
+        self.checkpoint_manager = checkpoint_manager
         self._sessions: Dict[str, Session] = {}
         self._session_lock = asyncio.Lock()
         
@@ -387,6 +389,9 @@ class SessionManager(BaseManager[Session]):
         # Initialize error tracker
         from .error_tracker import ErrorTracker
         self.error_tracker = ErrorTracker()
+        
+        # Initialize timeline manager
+        self.timeline_manager = TimelineManager(checkpoint_manager) if checkpoint_manager else None
         
         # Initialize process registry for tracking running sessions
         registry_config = ProcessRegistryConfig(
@@ -1520,6 +1525,132 @@ class SessionManager(BaseManager[Session]):
             }
             for f in session.tool_results.filters
         ]
+    
+    # Timeline and checkpoint methods (Claudia compatibility)
+    
+    async def create_timeline_checkpoint(self,
+                                       session_id: str,
+                                       name: Optional[str] = None,
+                                       description: Optional[str] = None,
+                                       parent_id: Optional[str] = None,
+                                       metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Create a checkpoint with timeline tracking."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        return await self.timeline_manager.create_checkpoint(
+            session_id=session_id,
+            name=name,
+            description=description,
+            parent_id=parent_id,
+            metadata=metadata
+        )
+    
+    async def fork_checkpoint(self,
+                            session_id: str,
+                            checkpoint_id: str,
+                            fork_name: Optional[str] = None) -> Dict[str, Any]:
+        """Fork a checkpoint to create a new branch."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        return await self.timeline_manager.fork_checkpoint(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            fork_name=fork_name
+        )
+    
+    async def restore_checkpoint(self,
+                               session_id: str,
+                               checkpoint_id: str,
+                               create_restore_point: bool = True) -> Dict[str, Any]:
+        """Restore to a checkpoint with timeline tracking."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        result = await self.timeline_manager.restore_checkpoint(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            create_restore_point=create_restore_point
+        )
+        
+        # Update session state with restored data
+        session = self._sessions.get(session_id)
+        if session and "session_data" in result:
+            session_data = result["session_data"]
+            session.messages = [
+                SessionMessage(
+                    role=msg["role"],
+                    content=msg["content"],
+                    metadata=msg.get("metadata", {})
+                )
+                for msg in session_data.get("messages", [])
+            ]
+            session.context = session_data.get("context", {})
+            session.checkpoint_id = checkpoint_id
+        
+        return result
+    
+    async def compare_checkpoints(self,
+                                session_id: str,
+                                checkpoint_id1: str,
+                                checkpoint_id2: str) -> Dict[str, Any]:
+        """Compare two checkpoints."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        comparison = await self.timeline_manager.compare_checkpoints(
+            session_id=session_id,
+            checkpoint_id1=checkpoint_id1,
+            checkpoint_id2=checkpoint_id2
+        )
+        
+        return comparison.to_dict()
+    
+    async def get_session_timeline(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get the complete timeline for a session."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        return await self.timeline_manager.get_timeline(session_id)
+    
+    async def set_checkpoint_strategy(self,
+                                    session_id: str,
+                                    strategy: str,
+                                    enabled: bool = True) -> None:
+        """Set the checkpoint strategy for a session."""
+        if not self.timeline_manager:
+            raise ValueError("Timeline manager not initialized")
+        
+        strategy_enum = CheckpointStrategy(strategy)
+        await self.timeline_manager.set_checkpoint_strategy(
+            session_id=session_id,
+            strategy=strategy_enum,
+            enabled=enabled
+        )
+    
+    async def handle_checkpoint_event(self,
+                                    session_id: str,
+                                    event_type: str,
+                                    event_data: Dict[str, Any]) -> None:
+        """Handle events that might trigger auto-checkpoints."""
+        if not self.timeline_manager:
+            return
+        
+        should_checkpoint = await self.timeline_manager.should_create_checkpoint(
+            session_id=session_id,
+            event_type=event_type,
+            event_data=event_data
+        )
+        
+        if should_checkpoint:
+            # Auto-create checkpoint
+            await self.create_timeline_checkpoint(
+                session_id=session_id,
+                name=f"Auto: {event_type}",
+                description=f"Automatically created after {event_type}",
+                metadata={"auto": True, "trigger": event_type, **event_data}
+            )
     
     async def _save_session(self, session: Session) -> None:
         """Save session to database."""

@@ -30,6 +30,7 @@ class Checkpoint:
     size_bytes: int
     compression_ratio: float
     cas_hash: str
+    parent_id: Optional[str] = None  # For timeline tree structure
     metadata: Dict[str, Any] = field(default_factory=dict)
     tags: List[str] = field(default_factory=list)
     
@@ -38,6 +39,7 @@ class Checkpoint:
         return {
             "id": self.id,
             "session_id": self.session_id,
+            "parent_id": self.parent_id,
             "name": self.name,
             "description": self.description,
             "created_at": self.created_at.isoformat(),
@@ -111,6 +113,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
             CREATE TABLE IF NOT EXISTS checkpoints (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
+                parent_id TEXT,
                 name TEXT,
                 description TEXT,
                 created_at TIMESTAMP NOT NULL,
@@ -119,7 +122,8 @@ class CheckpointManager(BaseManager[Checkpoint]):
                 cas_hash TEXT NOT NULL,
                 metadata TEXT,
                 tags TEXT,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
+                FOREIGN KEY (session_id) REFERENCES sessions(id),
+                FOREIGN KEY (parent_id) REFERENCES checkpoints(id)
             )
         """)
         
@@ -138,6 +142,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
         session_id: str,
         name: Optional[str] = None,
         description: Optional[str] = None,
+        parent_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
         auto_cleanup: bool = True
     ) -> Checkpoint:
@@ -177,6 +182,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
         checkpoint = Checkpoint(
             id=checkpoint_id,
             session_id=session_id,
+            parent_id=parent_id,
             name=name or f"Checkpoint {len(self._session_checkpoints.get(session_id, [])) + 1}",
             description=description,
             created_at=datetime.now(timezone.utc),
@@ -396,7 +402,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
     async def _load_checkpoints(self) -> None:
         """Load checkpoints from database."""
         rows = await self.execute_query("""
-            SELECT id, session_id, name, description, created_at,
+            SELECT id, session_id, parent_id, name, description, created_at,
                    size_bytes, compression_ratio, cas_hash, metadata, tags
             FROM checkpoints
             ORDER BY created_at DESC
@@ -406,6 +412,7 @@ class CheckpointManager(BaseManager[Checkpoint]):
             checkpoint = Checkpoint(
                 id=row['id'],
                 session_id=row['session_id'],
+                parent_id=row['parent_id'],
                 name=row['name'],
                 description=row['description'],
                 created_at=datetime.fromisoformat(row['created_at']),
@@ -426,12 +433,13 @@ class CheckpointManager(BaseManager[Checkpoint]):
         """Persist checkpoint to database."""
         await self.db.execute("""
             INSERT INTO checkpoints (
-                id, session_id, name, description, created_at,
+                id, session_id, parent_id, name, description, created_at,
                 size_bytes, compression_ratio, cas_hash, metadata, tags
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             checkpoint.id,
             checkpoint.session_id,
+            checkpoint.parent_id,
             checkpoint.name,
             checkpoint.description,
             checkpoint.created_at.isoformat(),

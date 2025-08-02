@@ -116,9 +116,17 @@ class ServerState:
             
             # Initialize core managers with dependency injection
             self.managers['binary'] = BinaryManager(self.config.binary_manager)
+            
+            # Initialize checkpoint manager before session manager
+            self.managers['checkpoint'] = CheckpointManager(
+                self.config.checkpoint
+                # cas=self.cas
+            )
+            
             self.managers['session'] = SessionManager(
                 self.config.session_manager,
-                self.managers['binary']
+                self.managers['binary'],
+                checkpoint_manager=self.managers['checkpoint']
                 # cas=self.cas,
                 # jsonl_processor=self.jsonl_processor
             )
@@ -126,10 +134,6 @@ class ServerState:
                 self.config.agent_manager
             )
             self.managers['mcp_server'] = MCPServerManager(self.config.mcp)
-            self.managers['checkpoint'] = CheckpointManager(
-                self.config.checkpoint
-                # cas=self.cas
-            )
             self.managers['hook'] = HookManager(self.config.hooks)
             self.managers['analytics'] = AnalyticsManager(
                 self.config.analytics,
@@ -4037,6 +4041,276 @@ async def get_tool_results_by_category(
     except Exception as e:
         logger.error(f"Error getting category results: {e}", exc_info=True)
         return {"error": f"Failed to get category results: {str(e)}"}
+
+
+# Timeline and checkpoint navigation tools (Claudia compatibility)
+
+@mcp_server.tool("create_timeline_checkpoint")
+@require_initialized
+async def create_timeline_checkpoint(
+    session_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    parent_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create a checkpoint with timeline tracking for navigation.
+    
+    Args:
+        session_id: Session ID
+        name: Optional checkpoint name
+        description: Optional checkpoint description
+        parent_id: Optional parent checkpoint ID for branching
+        
+    Returns:
+        Checkpoint details with timeline information
+    """
+    logger.debug(f"Tool called: create_timeline_checkpoint(session_id={session_id}, name={name})")
+    
+    try:
+        result = await state.managers['session'].create_timeline_checkpoint(
+            session_id=session_id,
+            name=name,
+            description=description,
+            parent_id=parent_id
+        )
+        
+        return {
+            "status": "success",
+            **result
+        }
+    except ValueError as e:
+        logger.error(f"Timeline not initialized: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error creating checkpoint: {e}", exc_info=True)
+        return {"error": f"Failed to create checkpoint: {str(e)}"}
+
+
+@mcp_server.tool("fork_checkpoint")
+@require_initialized
+async def fork_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    fork_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fork a checkpoint to create a new branch in the timeline.
+    
+    Args:
+        session_id: Session ID
+        checkpoint_id: Checkpoint to fork from
+        fork_name: Optional name for the fork
+        
+    Returns:
+        Fork details with new checkpoint information
+    """
+    logger.debug(f"Tool called: fork_checkpoint(session_id={session_id}, checkpoint_id={checkpoint_id})")
+    
+    try:
+        result = await state.managers['session'].fork_checkpoint(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            fork_name=fork_name
+        )
+        
+        return {
+            "status": "success",
+            **result
+        }
+    except ValueError as e:
+        logger.error(f"Fork error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error forking checkpoint: {e}", exc_info=True)
+        return {"error": f"Failed to fork checkpoint: {str(e)}"}
+
+
+@mcp_server.tool("restore_checkpoint")
+@require_initialized
+async def restore_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    create_restore_point: bool = True
+) -> Dict[str, Any]:
+    """
+    Restore session to a previous checkpoint state.
+    
+    Args:
+        session_id: Session ID
+        checkpoint_id: Checkpoint to restore to
+        create_restore_point: Whether to create a restore point before restoring
+        
+    Returns:
+        Restoration details with session state
+    """
+    logger.debug(f"Tool called: restore_checkpoint(session_id={session_id}, checkpoint_id={checkpoint_id})")
+    
+    try:
+        result = await state.managers['session'].restore_checkpoint(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            create_restore_point=create_restore_point
+        )
+        
+        return {
+            "status": "success",
+            **result
+        }
+    except ValueError as e:
+        logger.error(f"Restore error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error restoring checkpoint: {e}", exc_info=True)
+        return {"error": f"Failed to restore checkpoint: {str(e)}"}
+
+
+@mcp_server.tool("compare_checkpoints")
+@require_initialized
+async def compare_checkpoints(
+    session_id: str,
+    checkpoint_id1: str,
+    checkpoint_id2: str
+) -> Dict[str, Any]:
+    """
+    Compare two checkpoints to see differences.
+    
+    Args:
+        session_id: Session ID
+        checkpoint_id1: First checkpoint
+        checkpoint_id2: Second checkpoint
+        
+    Returns:
+        Comparison details including file changes and token deltas
+    """
+    logger.debug(f"Tool called: compare_checkpoints(session_id={session_id}, id1={checkpoint_id1}, id2={checkpoint_id2})")
+    
+    try:
+        result = await state.managers['session'].compare_checkpoints(
+            session_id=session_id,
+            checkpoint_id1=checkpoint_id1,
+            checkpoint_id2=checkpoint_id2
+        )
+        
+        return {
+            "status": "success",
+            "comparison": result
+        }
+    except ValueError as e:
+        logger.error(f"Compare error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error comparing checkpoints: {e}", exc_info=True)
+        return {"error": f"Failed to compare checkpoints: {str(e)}"}
+
+
+@mcp_server.tool("get_session_timeline")
+@require_initialized
+async def get_session_timeline(session_id: str) -> Dict[str, Any]:
+    """
+    Get the complete checkpoint timeline for a session.
+    
+    Args:
+        session_id: Session ID
+        
+    Returns:
+        Timeline tree structure with all checkpoints
+    """
+    logger.debug(f"Tool called: get_session_timeline(session_id={session_id})")
+    
+    try:
+        timeline = await state.managers['session'].get_session_timeline(session_id)
+        
+        if timeline:
+            return {
+                "status": "success",
+                "timeline": timeline
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": f"No timeline found for session {session_id}"
+            }
+    except ValueError as e:
+        logger.error(f"Timeline error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting timeline: {e}", exc_info=True)
+        return {"error": f"Failed to get timeline: {str(e)}"}
+
+
+@mcp_server.tool("set_checkpoint_strategy")
+@require_initialized
+async def set_checkpoint_strategy(
+    session_id: str,
+    strategy: str,
+    enabled: bool = True
+) -> Dict[str, Any]:
+    """
+    Set the auto-checkpoint strategy for a session.
+    
+    Args:
+        session_id: Session ID
+        strategy: Strategy type (manual, per_prompt, per_tool_use, smart)
+        enabled: Whether auto-checkpointing is enabled
+        
+    Returns:
+        Confirmation of strategy update
+    """
+    logger.debug(f"Tool called: set_checkpoint_strategy(session_id={session_id}, strategy={strategy})")
+    
+    try:
+        await state.managers['session'].set_checkpoint_strategy(
+            session_id=session_id,
+            strategy=strategy,
+            enabled=enabled
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Checkpoint strategy set to {strategy} (enabled: {enabled})"
+        }
+    except ValueError as e:
+        logger.error(f"Strategy error: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error setting strategy: {e}", exc_info=True)
+        return {"error": f"Failed to set strategy: {str(e)}"}
+
+
+@mcp_server.tool("list_session_checkpoints")
+@require_initialized
+async def list_session_checkpoints(
+    session_id: str,
+    limit: int = 100
+) -> Dict[str, Any]:
+    """
+    List all checkpoints for a session.
+    
+    Args:
+        session_id: Session ID
+        limit: Maximum number of checkpoints to return
+        
+    Returns:
+        List of checkpoints with metadata
+    """
+    logger.debug(f"Tool called: list_session_checkpoints(session_id={session_id})")
+    
+    try:
+        if state.managers.get('checkpoint'):
+            checkpoints = await state.managers['checkpoint'].list_session_checkpoints(session_id)
+            
+            return {
+                "status": "success",
+                "checkpoints": checkpoints[:limit],
+                "total": len(checkpoints)
+            }
+        else:
+            return {"error": "Checkpoint manager not initialized"}
+            
+    except Exception as e:
+        logger.error(f"Error listing checkpoints: {e}", exc_info=True)
+        return {"error": f"Failed to list checkpoints: {str(e)}"}
 
 
 # Claude Code Session Streaming Resource
