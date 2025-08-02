@@ -2655,6 +2655,452 @@ async def get_config() -> str:
     return json.dumps(config_dict, indent=2)
 
 
+# ================================
+# Claude Code Session Management Tools
+# ================================
+# These tools replace Tauri IPC commands from Claudia with MCP tools
+
+@mcp_server.tool()
+async def start_claude_session(
+    project_path: str,
+    prompt: str,
+    model: str = "sonnet"
+) -> Dict[str, Any]:
+    """
+    Start a new Claude Code session (replaces execute_claude_code from Claudia).
+    
+    Args:
+        project_path: Absolute path to the project directory
+        prompt: Initial prompt to send to Claude
+        model: Claude model to use (sonnet, opus, haiku)
+    
+    Returns:
+        Session details including session_id and process information
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: start_claude_session(project_path={project_path}, model={model})")
+    
+    try:
+        # Validate inputs
+        if not project_path or not os.path.isdir(project_path):
+            raise ValidationError("project_path", project_path, "Must be a valid directory path")
+        
+        validate_prompt(prompt)
+        validate_model(model)
+        
+        # Generate session ID
+        session_id = str(uuid.uuid4())
+        
+        # Find Claude binary
+        binary_info = await state.managers['binary'].get_claude_binary()
+        if not binary_info or not binary_info.get('is_available'):
+            raise ShannonMCPError("Claude Code binary not found or not available")
+        
+        claude_path = binary_info['path']
+        
+        # Prepare Claude Code arguments (matching Claudia's execute_claude_code)
+        args = [
+            claude_path,
+            "-p", prompt,
+            "--model", model,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions"
+        ]
+        
+        # Start the session using session manager
+        session = await state.managers['session'].create_session(
+            session_id=session_id,
+            project_path=project_path,
+            command_args=args,
+            metadata={
+                'initial_prompt': prompt,
+                'model': model,
+                'type': 'new_session'
+            }
+        )
+        
+        # Start the actual Claude process
+        process_info = await state.managers['session'].start_session(session_id)
+        
+        logger.info(f"Started Claude session {session_id} in {project_path}")
+        
+        return {
+            "session_id": session_id,
+            "project_path": project_path,
+            "model": model,
+            "status": "started",
+            "process": {
+                "pid": process_info.get('pid'),
+                "command": ' '.join(args)
+            },
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to start Claude session: {e}", exc_info=True)
+        if isinstance(e, (ValidationError, ShannonMCPError)):
+            raise
+        raise ShannonMCPError(f"Failed to start Claude session: {str(e)}")
+
+
+@mcp_server.tool()
+async def continue_claude_session(
+    session_id: str,
+    prompt: str,
+    model: str = "sonnet"
+) -> Dict[str, Any]:
+    """
+    Continue an existing Claude Code session with a new prompt (replaces continue_claude_code from Claudia).
+    
+    Args:
+        session_id: ID of the existing session
+        prompt: New prompt to send to Claude
+        model: Claude model to use (sonnet, opus, haiku)
+    
+    Returns:
+        Session continuation status and process information
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: continue_claude_session(session_id={session_id}, model={model})")
+    
+    try:
+        # Validate inputs
+        validate_session_id(session_id)
+        validate_prompt(prompt)
+        validate_model(model)
+        
+        # Check if session exists
+        session = await state.managers['session'].get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(session_id)
+        
+        # Get session project path
+        project_path = session.project_path
+        
+        # Find Claude binary
+        binary_info = await state.managers['binary'].get_claude_binary()
+        if not binary_info or not binary_info.get('is_available'):
+            raise ShannonMCPError("Claude Code binary not found or not available")
+        
+        claude_path = binary_info['path']
+        
+        # Prepare Claude Code arguments with continue flag (matching Claudia's continue_claude_code)
+        args = [
+            claude_path,
+            "-c",  # Continue flag
+            "-p", prompt,
+            "--model", model,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions"
+        ]
+        
+        # Update session metadata
+        await state.managers['session'].update_session_metadata(session_id, {
+            'last_prompt': prompt,
+            'model': model,
+            'type': 'continue_session',
+            'continued_at': datetime.now(timezone.utc).isoformat()
+        })
+        
+        # Start/continue the Claude process
+        process_info = await state.managers['session'].continue_session(session_id, args)
+        
+        logger.info(f"Continued Claude session {session_id} with new prompt")
+        
+        return {
+            "session_id": session_id,
+            "project_path": project_path,
+            "model": model,
+            "status": "continued",
+            "process": {
+                "pid": process_info.get('pid'),
+                "command": ' '.join(args)
+            },
+            "continued_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to continue Claude session: {e}", exc_info=True)
+        if isinstance(e, (ValidationError, SessionNotFoundError, ShannonMCPError)):
+            raise
+        raise ShannonMCPError(f"Failed to continue Claude session: {str(e)}")
+
+
+@mcp_server.tool()
+async def resume_claude_session(
+    session_id: str,
+    prompt: str,
+    model: str = "sonnet"
+) -> Dict[str, Any]:
+    """
+    Resume a previous Claude Code session by ID (replaces resume_claude_code from Claudia).
+    
+    Args:
+        session_id: ID of the session to resume
+        prompt: New prompt to send to Claude
+        model: Claude model to use (sonnet, opus, haiku)
+    
+    Returns:
+        Session resume status and process information
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: resume_claude_session(session_id={session_id}, model={model})")
+    
+    try:
+        # Validate inputs
+        validate_session_id(session_id)
+        validate_prompt(prompt)
+        validate_model(model)
+        
+        # Check if session exists
+        session = await state.managers['session'].get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(session_id)
+        
+        # Get session project path
+        project_path = session.project_path
+        
+        # Find Claude binary
+        binary_info = await state.managers['binary'].get_claude_binary()
+        if not binary_info or not binary_info.get('is_available'):
+            raise ShannonMCPError("Claude Code binary not found or not available")
+        
+        claude_path = binary_info['path']
+        
+        # Prepare Claude Code arguments with resume flag (matching Claudia's resume_claude_code)
+        args = [
+            claude_path,
+            "--resume", session_id,
+            "-p", prompt,
+            "--model", model,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions"
+        ]
+        
+        # Update session metadata
+        await state.managers['session'].update_session_metadata(session_id, {
+            'last_prompt': prompt,
+            'model': model,
+            'type': 'resume_session',
+            'resumed_at': datetime.now(timezone.utc).isoformat()
+        })
+        
+        # Resume the Claude process
+        process_info = await state.managers['session'].resume_session(session_id, args)
+        
+        logger.info(f"Resumed Claude session {session_id} with new prompt")
+        
+        return {
+            "session_id": session_id,
+            "project_path": project_path,
+            "model": model,
+            "status": "resumed",
+            "process": {
+                "pid": process_info.get('pid'),
+                "command": ' '.join(args)
+            },
+            "resumed_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to resume Claude session: {e}", exc_info=True)
+        if isinstance(e, (ValidationError, SessionNotFoundError, ShannonMCPError)):
+            raise
+        raise ShannonMCPError(f"Failed to resume Claude session: {str(e)}")
+
+
+@mcp_server.tool()
+async def stop_claude_session(session_id: str) -> Dict[str, Any]:
+    """
+    Stop/cancel a running Claude Code session (replaces cancel_claude_execution from Claudia).
+    
+    Args:
+        session_id: ID of the session to stop
+    
+    Returns:
+        Session stop status
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: stop_claude_session(session_id={session_id})")
+    
+    try:
+        # Validate inputs
+        validate_session_id(session_id)
+        
+        # Check if session exists
+        session = await state.managers['session'].get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(session_id)
+        
+        # Stop the session
+        await state.managers['session'].stop_session(session_id)
+        
+        logger.info(f"Stopped Claude session {session_id}")
+        
+        return {
+            "session_id": session_id,
+            "status": "stopped",
+            "stopped_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to stop Claude session: {e}", exc_info=True)
+        if isinstance(e, (ValidationError, SessionNotFoundError, ShannonMCPError)):
+            raise
+        raise ShannonMCPError(f"Failed to stop Claude session: {str(e)}")
+
+
+@mcp_server.tool()
+async def list_claude_sessions(
+    project_path: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    List Claude Code sessions (replaces get_project_sessions from Claudia).
+    
+    Args:
+        project_path: Optional project path to filter by
+        status: Optional status filter (running, stopped, completed, error)
+        limit: Maximum number of sessions to return
+    
+    Returns:
+        List of sessions with metadata
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: list_claude_sessions(project_path={project_path}, status={status})")
+    
+    try:
+        # Get all sessions
+        sessions, total = await state.managers['session'].list_sessions(limit=limit)
+        
+        # Filter by project path if specified
+        if project_path:
+            sessions = [s for s in sessions if s.project_path == project_path]
+        
+        # Filter by status if specified
+        if status:
+            sessions = [s for s in sessions if s.state.name.lower() == status.lower()]
+        
+        # Convert to dict format
+        session_list = []
+        for session in sessions:
+            session_dict = session.to_dict()
+            # Add runtime information
+            session_dict['runtime_info'] = await state.managers['session'].get_session_runtime_info(session.id)
+            session_list.append(session_dict)
+        
+        logger.info(f"Listed {len(session_list)} Claude sessions")
+        
+        return {
+            "sessions": session_list,
+            "total": len(session_list),
+            "filtered": project_path is not None or status is not None
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list Claude sessions: {e}", exc_info=True)
+        raise ShannonMCPError(f"Failed to list Claude sessions: {str(e)}")
+
+
+@mcp_server.tool()
+async def get_claude_session_history(
+    session_id: str,
+    include_raw_output: bool = False
+) -> Dict[str, Any]:
+    """
+    Get the history/output of a Claude Code session (replaces load_session_history from Claudia).
+    
+    Args:
+        session_id: ID of the session
+        include_raw_output: Whether to include raw JSONL output
+    
+    Returns:
+        Session history including messages and metadata
+    """
+    logger = _ensure_logger()
+    logger.debug(f"Tool called: get_claude_session_history(session_id={session_id})")
+    
+    try:
+        # Validate inputs
+        validate_session_id(session_id)
+        
+        # Check if session exists
+        session = await state.managers['session'].get_session(session_id)
+        if not session:
+            raise SessionNotFoundError(session_id)
+        
+        # Get session history
+        history = await state.managers['session'].get_session_history(session_id)
+        
+        # Get analytics
+        analytics = await state.managers['analytics'].get_session_analytics(session_id)
+        
+        # Get checkpoints
+        checkpoints = await state.managers['checkpoint'].list_session_checkpoints(session_id)
+        
+        result = {
+            "session_id": session_id,
+            "session": session.to_dict(),
+            "history": history,
+            "analytics": analytics,
+            "checkpoints": [cp.to_dict() for cp in checkpoints]
+        }
+        
+        # Include raw output if requested
+        if include_raw_output:
+            raw_output = await state.managers['session'].get_session_raw_output(session_id)
+            result['raw_output'] = raw_output
+        
+        logger.info(f"Retrieved history for Claude session {session_id}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to get Claude session history: {e}", exc_info=True)
+        if isinstance(e, (ValidationError, SessionNotFoundError)):
+            raise
+        raise ShannonMCPError(f"Failed to get Claude session history: {str(e)}")
+
+
+# ================================
+# Claude Code Session Streaming Resource
+# ================================
+# This resource provides real-time streaming output (replaces Tauri events from Claudia)
+
+@mcp_server.resource("shannon://claude-session/{session_id}/stream")
+@require_initialized
+async def get_claude_session_stream(session_id: str) -> str:
+    """
+    Real-time streaming output from a Claude Code session (replaces claude-output Tauri events).
+    
+    This resource provides live output from the Claude Code process, similar to how
+    Claudia emits claude-output, claude-error, and claude-complete events.
+    """
+    try:
+        # Validate session exists
+        session = await state.managers['session'].get_session(session_id)
+        if not session:
+            return json.dumps({"error": f"Session {session_id} not found"})
+        
+        # Get live output stream
+        stream_data = await state.managers['session'].get_session_live_stream(session_id)
+        
+        return json.dumps({
+            "session_id": session_id,
+            "status": session.state.name,
+            "stream": stream_data,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, indent=2)
+        
+    except Exception as e:
+        logger.error(f"Failed to get session stream: {e}", exc_info=True)
+        return json.dumps({"error": f"Failed to get session stream: {str(e)}"})
+
+
 @mcp_server.resource("shannon://agents")
 @require_initialized
 async def get_agents() -> str:
