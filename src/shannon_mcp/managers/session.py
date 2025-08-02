@@ -23,9 +23,11 @@ import json
 import uuid
 import weakref
 import structlog
+import re
 
 from ..managers.base import BaseManager, ManagerConfig, HealthStatus
 from ..managers.binary import BinaryManager, BinaryInfo
+from ..managers.process_registry import ProcessRegistryManager, ProcessRegistryConfig, RegisteredSession
 from ..utils.config import SessionManagerConfig
 from ..utils.errors import (
     SystemError, TimeoutError, ValidationError,
@@ -76,16 +78,37 @@ class SessionMessage:
 
 @dataclass
 class SessionMetrics:
-    """Session performance metrics."""
+    """Comprehensive session metrics similar to Claudia's analytics."""
+    # Timing metrics
     start_time: datetime = field(default_factory=datetime.utcnow)
     end_time: Optional[datetime] = None
+    first_message_time: Optional[datetime] = None
+    last_activity_time: datetime = field(default_factory=datetime.utcnow)
+    
+    # Activity metrics (from Claudia)
+    prompts_sent: int = 0
+    tools_executed: int = 0
+    tools_failed: int = 0
+    files_created: int = 0
+    files_modified: int = 0
+    files_deleted: int = 0
+    code_blocks_generated: int = 0
+    errors_encountered: int = 0
+    
+    # Performance metrics
+    tool_execution_times: List[float] = field(default_factory=list)
+    checkpoint_count: int = 0
+    model_changes: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # Token and message metrics
     tokens_input: int = 0
     tokens_output: int = 0
     messages_sent: int = 0
     messages_received: int = 0
-    errors_count: int = 0
-    checkpoints_created: int = 0
     stream_bytes_received: int = 0
+    
+    # Session state
+    was_resumed: bool = False
     
     @property
     def duration(self) -> Optional[timedelta]:
@@ -101,6 +124,69 @@ class SessionMetrics:
         if duration and duration.total_seconds() > 0:
             return self.tokens_output / duration.total_seconds()
         return 0.0
+    
+    @property
+    def time_to_first_message(self) -> Optional[float]:
+        """Time to first message in milliseconds."""
+        if self.first_message_time:
+            delta = self.first_message_time - self.start_time
+            return delta.total_seconds() * 1000
+        return None
+    
+    @property
+    def idle_time(self) -> float:
+        """Idle time since last activity in milliseconds."""
+        delta = datetime.utcnow() - self.last_activity_time
+        return delta.total_seconds() * 1000
+    
+    @property
+    def average_tool_execution_time(self) -> Optional[float]:
+        """Average tool execution time in milliseconds."""
+        if self.tool_execution_times:
+            return sum(self.tool_execution_times) / len(self.tool_execution_times)
+        return None
+    
+    def track_tool_execution_start(self) -> datetime:
+        """Track start of tool execution."""
+        return datetime.utcnow()
+    
+    def track_tool_execution_end(self, start_time: datetime, success: bool = True) -> None:
+        """Track end of tool execution."""
+        execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+        self.tool_execution_times.append(execution_time)
+        self.tools_executed += 1
+        if not success:
+            self.tools_failed += 1
+        self.last_activity_time = datetime.utcnow()
+    
+    def track_file_operation(self, operation: str) -> None:
+        """Track file operations."""
+        if operation == "create":
+            self.files_created += 1
+        elif operation == "modify":
+            self.files_modified += 1
+        elif operation == "delete":
+            self.files_deleted += 1
+        self.last_activity_time = datetime.utcnow()
+    
+    def track_code_block(self) -> None:
+        """Track code block generation."""
+        self.code_blocks_generated += 1
+        self.last_activity_time = datetime.utcnow()
+    
+    def track_error(self) -> None:
+        """Track error occurrence."""
+        self.errors_encountered += 1
+        self.last_activity_time = datetime.utcnow()
+    
+    def track_model_change(self, from_model: str, to_model: str) -> None:
+        """Track model changes."""
+        self.model_changes.append({
+            "from": from_model,
+            "to": to_model,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        self.last_activity_time = datetime.utcnow()
 
 
 @dataclass
@@ -153,13 +239,28 @@ class Session:
             "metrics": {
                 "start_time": self.metrics.start_time.isoformat(),
                 "end_time": self.metrics.end_time.isoformat() if self.metrics.end_time else None,
+                "first_message_time": self.metrics.first_message_time.isoformat() if self.metrics.first_message_time else None,
+                "last_activity_time": self.metrics.last_activity_time.isoformat(),
+                "duration_seconds": self.metrics.duration.total_seconds() if self.metrics.duration else None,
+                "time_to_first_message_ms": self.metrics.time_to_first_message,
+                "idle_time_ms": self.metrics.idle_time,
+                "average_tool_execution_time_ms": self.metrics.average_tool_execution_time,
                 "tokens_input": self.metrics.tokens_input,
                 "tokens_output": self.metrics.tokens_output,
+                "tokens_per_second": self.metrics.tokens_per_second,
                 "messages_sent": self.metrics.messages_sent,
                 "messages_received": self.metrics.messages_received,
-                "errors_count": self.metrics.errors_count,
-                "duration_seconds": self.metrics.duration.total_seconds() if self.metrics.duration else None,
-                "tokens_per_second": self.metrics.tokens_per_second
+                "prompts_sent": self.metrics.prompts_sent,
+                "tools_executed": self.metrics.tools_executed,
+                "tools_failed": self.metrics.tools_failed,
+                "files_created": self.metrics.files_created,
+                "files_modified": self.metrics.files_modified,
+                "files_deleted": self.metrics.files_deleted,
+                "code_blocks_generated": self.metrics.code_blocks_generated,
+                "errors_encountered": self.metrics.errors_encountered,
+                "checkpoint_count": self.metrics.checkpoint_count,
+                "was_resumed": self.metrics.was_resumed,
+                "model_changes": self.metrics.model_changes
             }
         }
 
@@ -180,6 +281,13 @@ class SessionManager(BaseManager[Session]):
         self.binary_manager = binary_manager
         self._sessions: Dict[str, Session] = {}
         self._session_lock = asyncio.Lock()
+        
+        # Initialize process registry for tracking running sessions
+        registry_config = ProcessRegistryConfig(
+            name="session_process_registry",
+            db_path=Path.home() / ".shannon-mcp" / "session_registry.db"
+        )
+        self.process_registry = ProcessRegistryManager(registry_config)
         
         # Stream processor will be initialized in _initialize
         self._stream_processor = None
@@ -212,6 +320,10 @@ class SessionManager(BaseManager[Session]):
         # Initialize cache
         await self._session_cache.initialize()
         
+        # Initialize process registry
+        await self.process_registry.initialize()
+        await self.process_registry.start()
+        
         # Load active sessions from database
         await self._load_active_sessions()
     
@@ -226,6 +338,9 @@ class SessionManager(BaseManager[Session]):
         """Stop session manager operations."""
         # Gracefully terminate all sessions
         await self._shutdown_sessions()
+        
+        # Shutdown process registry
+        await self.process_registry.stop()
         
         # Shutdown cache
         await self._session_cache.shutdown()
@@ -341,8 +456,22 @@ class SessionManager(BaseManager[Session]):
                     context=context or {}
                 )
                 
+                # Set resume flag if checkpoint provided
+                if checkpoint_id:
+                    session.metrics.was_resumed = True
+                
                 # Add initial message
                 session.add_message("user", prompt)
+                session.metrics.prompts_sent += 1
+                
+                # Register with process registry for tracking
+                await self.process_registry.register_claude_session(
+                    session_id=session_id,
+                    project_path=context.get("project_path", "") if context else "",
+                    task=prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    model=model,
+                    was_resumed=bool(checkpoint_id)
+                )
                 
                 # Store session
                 self._sessions[session_id] = session
@@ -418,6 +547,15 @@ class SessionManager(BaseManager[Session]):
                 await session.process.stdin.write(f"{prompt}\n".encode())
                 await session.process.stdin.drain()
                 session.metrics.messages_sent += 1
+                
+                # Track first message time
+                if not session.metrics.first_message_time:
+                    session.metrics.first_message_time = datetime.utcnow()
+                
+                # Update process registry
+                await self.process_registry.update_session_status(
+                    session.id, "running"
+                )
             
             logger.info(
                 "session_started",
@@ -468,6 +606,7 @@ class SessionManager(BaseManager[Session]):
             try:
                 # Add message to history
                 session.add_message("user", content)
+                session.metrics.prompts_sent += 1
                 
                 # Send to process
                 await asyncio.wait_for(
@@ -477,6 +616,15 @@ class SessionManager(BaseManager[Session]):
                 await session.process.stdin.drain()
                 
                 session.metrics.messages_sent += 1
+                session.metrics.last_activity_time = datetime.utcnow()
+                
+                # Update process registry
+                await self.process_registry.update_session_metrics(
+                    session_id, {
+                        "prompts_sent": session.metrics.prompts_sent,
+                        "messages_sent": session.metrics.messages_sent
+                    }
+                )
                 
                 # Save session state
                 await self._save_session(session)
@@ -542,6 +690,11 @@ class SessionManager(BaseManager[Session]):
                 
                 session.state = SessionState.CANCELLED
                 session.metrics.end_time = datetime.utcnow()
+                
+                # Update process registry
+                await self.process_registry.update_session_status(
+                    session.id, "cancelled"
+                )
                 
                 # Cancel stream task
                 if session._stream_task:
@@ -660,6 +813,40 @@ class SessionManager(BaseManager[Session]):
         
         return stream_messages
     
+    async def list_running_claude_sessions(self) -> List[Dict[str, Any]]:
+        """
+        List all running Claude Code sessions (Claudia API compatibility).
+        
+        Returns list of active sessions in Claudia-compatible format with ProcessInfo.
+        This replaces the Tauri command listRunningClaudeSessions().
+        
+        Returns:
+            List of running session info in Claudia format
+        """
+        running_sessions = await self.process_registry.get_running_claude_sessions()
+        
+        # Convert to Claudia-compatible format
+        claudia_sessions = []
+        for process_info in running_sessions:
+            session_data = {
+                "run_id": process_info.run_id,
+                "process_type": {
+                    "ClaudeSession": {
+                        "session_id": process_info.session_id
+                    }
+                },
+                "pid": process_info.pid,
+                "started_at": process_info.metrics.start_time.isoformat(),
+                "project_path": process_info.project_path,
+                "task": process_info.task,
+                "model": process_info.model,
+                "status": process_info.status.value if hasattr(process_info.status, 'value') else process_info.status,
+                "metrics": process_info.metrics.to_dict() if hasattr(process_info.metrics, 'to_dict') else {}
+            }
+            claudia_sessions.append(session_data)
+        
+        return claudia_sessions
+    
     async def create_checkpoint(self, session_id: str) -> str:
         """
         Create a checkpoint for a session.
@@ -682,6 +869,15 @@ class SessionManager(BaseManager[Session]):
         checkpoint_id = f"checkpoint_{uuid.uuid4().hex[:12]}"
         
         session.metrics.checkpoints_created += 1
+        session.metrics.checkpoint_count += 1
+        session.metrics.last_activity_time = datetime.utcnow()
+        
+        # Update process registry
+        await self.process_registry.update_session_metrics(
+            session_id, {
+                "checkpoint_count": session.metrics.checkpoint_count
+            }
+        )
         
         # Emit checkpoint event to Claude
         if session.process and session.process.stdin:
@@ -834,20 +1030,92 @@ class SessionManager(BaseManager[Session]):
     
     @event_handler(categories=EventCategory.SESSION, event_names="stream_message")
     async def _handle_stream_message(self, event) -> None:
-        """Handle stream messages from processor."""
+        """Handle stream messages from processor with comprehensive analytics."""
         session_id = event.data.get("session_id")
         message = event.data.get("message")
         
         session = self._sessions.get(session_id)
         if session and message:
-            # Update metrics
+            # Track enhanced tool execution (similar to Claudia)
+            if message.get("type") == "assistant" and message.get("message", {}).get("content"):
+                content = message["message"]["content"]
+                if isinstance(content, list):
+                    # Track tool uses
+                    for item in content:
+                        if item.get("type") == "tool_use":
+                            # Track tool execution start
+                            tool_name = item.get("name", "").lower()
+                            session.metrics.tools_executed += 1
+                            session.metrics.last_activity_time = datetime.utcnow()
+                            
+                            # Track file operations based on tool name
+                            if "create" in tool_name or "write" in tool_name:
+                                session.metrics.track_file_operation("create")
+                            elif "edit" in tool_name or "multiedit" in tool_name or "search_replace" in tool_name:
+                                session.metrics.track_file_operation("modify")
+                            elif "delete" in tool_name:
+                                session.metrics.track_file_operation("delete")
+                
+                # Track code blocks in text content
+                text_content = ""
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get("type") == "text":
+                            text_content += item.get("text", "")
+                elif isinstance(content, str):
+                    text_content = content
+                
+                # Count code blocks
+                code_block_pattern = r'```[\s\S]*?```'
+                code_blocks = re.findall(code_block_pattern, text_content)
+                if code_blocks:
+                    session.metrics.code_blocks_generated += len(code_blocks)
+            
+            # Track tool results and errors
+            if message.get("type") == "user" and message.get("message", {}).get("content"):
+                content = message["message"]["content"]
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get("type") == "tool_result":
+                            is_error = item.get("is_error", False)
+                            if is_error:
+                                session.metrics.tools_failed += 1
+                                session.metrics.track_error()
+            
+            # Track system errors
+            if message.get("type") == "system" and (message.get("subtype") == "error" or message.get("error")):
+                session.metrics.track_error()
+            
+            # Update token metrics
             if message.get("type") == "metric":
                 metrics = message.get("data", {})
                 session.metrics.tokens_input = metrics.get("tokens_input", session.metrics.tokens_input)
                 session.metrics.tokens_output = metrics.get("tokens_output", session.metrics.tokens_output)
             
+            # Track message usage if present
+            if message.get("message", {}).get("usage"):
+                usage = message["message"]["usage"]
+                session.metrics.tokens_input += usage.get("input_tokens", 0)
+                session.metrics.tokens_output += usage.get("output_tokens", 0)
+            
             # Track received messages
             session.metrics.messages_received += 1
+            session.metrics.last_activity_time = datetime.utcnow()
+            
+            # Update process registry with latest metrics
+            await self.process_registry.update_session_metrics(
+                session_id, {
+                    "tools_executed": session.metrics.tools_executed,
+                    "tools_failed": session.metrics.tools_failed,
+                    "files_created": session.metrics.files_created,
+                    "files_modified": session.metrics.files_modified,
+                    "files_deleted": session.metrics.files_deleted,
+                    "code_blocks_generated": session.metrics.code_blocks_generated,
+                    "errors_encountered": session.metrics.errors_encountered,
+                    "tokens_input": session.metrics.tokens_input,
+                    "tokens_output": session.metrics.tokens_output
+                }
+            )
 
 
 # Export public API
