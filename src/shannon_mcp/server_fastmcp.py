@@ -3189,6 +3189,161 @@ async def list_running_claude_sessions() -> Dict[str, Any]:
         return {"error": f"Failed to list running sessions: {str(e)}"}
 
 
+@mcp_server.tool("queue_claude_prompt")
+@require_initialized
+async def queue_claude_prompt(
+    session_id: str,
+    prompt: str,
+    model: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Queue a prompt for a Claude Code session (Claudia API compatibility).
+    
+    This implements Claudia's queued prompts functionality, allowing
+    prompts to be queued when a session is busy processing.
+    
+    Args:
+        session_id: ID of the session
+        prompt: The prompt to queue
+        model: Optional model override
+        
+    Returns:
+        Dict with queued prompt information
+    """
+    logger.debug(f"Tool called: queue_claude_prompt(session_id={session_id})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        session = state.managers['session']._sessions.get(session_id)
+        if not session:
+            return {"error": "Session not found"}
+        
+        queued_prompt = session.queue_prompt(prompt, model)
+        
+        result = {
+            "success": True,
+            "queued_prompt": {
+                "id": queued_prompt.id,
+                "prompt": queued_prompt.prompt,
+                "model": queued_prompt.model,
+                "timestamp": queued_prompt.timestamp.isoformat()
+            },
+            "queue_length": len(session.queued_prompts),
+            "session_id": session_id
+        }
+        
+        logger.info(f"Prompt queued", extra={
+            "session_id": session_id,
+            "prompt_id": queued_prompt.id,
+            "queue_length": len(session.queued_prompts)
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error queuing prompt: {e}", exc_info=True)
+        return {"error": f"Failed to queue prompt: {str(e)}"}
+
+
+@mcp_server.tool("remove_queued_prompt")
+@require_initialized
+async def remove_queued_prompt(
+    session_id: str,
+    prompt_id: str
+) -> Dict[str, Any]:
+    """
+    Remove a queued prompt from a session (Claudia API compatibility).
+    
+    Args:
+        session_id: ID of the session
+        prompt_id: ID of the queued prompt to remove
+        
+    Returns:
+        Dict with removal result
+    """
+    logger.debug(f"Tool called: remove_queued_prompt(session_id={session_id}, prompt_id={prompt_id})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        session = state.managers['session']._sessions.get(session_id)
+        if not session:
+            return {"error": "Session not found"}
+        
+        removed = session.remove_queued_prompt(prompt_id)
+        
+        result = {
+            "success": removed,
+            "session_id": session_id,
+            "prompt_id": prompt_id,
+            "remaining_queued": len(session.queued_prompts)
+        }
+        
+        if removed:
+            logger.info(f"Queued prompt removed", extra={
+                "session_id": session_id,
+                "prompt_id": prompt_id,
+                "remaining": len(session.queued_prompts)
+            })
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error removing queued prompt: {e}", exc_info=True)
+        return {"error": f"Failed to remove queued prompt: {str(e)}"}
+
+
+@mcp_server.tool("get_queued_prompts")
+@require_initialized
+async def get_queued_prompts(session_id: str) -> Dict[str, Any]:
+    """
+    Get all queued prompts for a session (Claudia API compatibility).
+    
+    Args:
+        session_id: ID of the session
+        
+    Returns:
+        Dict with list of queued prompts
+    """
+    logger.debug(f"Tool called: get_queued_prompts(session_id={session_id})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        session = state.managers['session']._sessions.get(session_id)
+        if not session:
+            return {"error": "Session not found"}
+        
+        queued_prompts = [
+            {
+                "id": qp.id,
+                "prompt": qp.prompt,
+                "model": qp.model,
+                "timestamp": qp.timestamp.isoformat(),
+                "metadata": qp.metadata
+            }
+            for qp in session.queued_prompts
+        ]
+        
+        result = {
+            "session_id": session_id,
+            "queued_prompts": queued_prompts,
+            "count": len(queued_prompts),
+            "is_processing": session._is_processing,
+            "session_state": session.state.value
+        }
+        
+        logger.info(f"Retrieved queued prompts", extra={
+            "session_id": session_id,
+            "count": len(queued_prompts)
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting queued prompts: {e}", exc_info=True)
+        return {"error": f"Failed to get queued prompts: {str(e)}"}
+
+
 # Claude Code Session Streaming Resource
 # ================================
 # This resource provides real-time streaming output (replaces Tauri events from Claudia)

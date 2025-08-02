@@ -190,6 +190,16 @@ class SessionMetrics:
 
 
 @dataclass
+class QueuedPrompt:
+    """Queued prompt for handling requests during session loading."""
+    id: str
+    prompt: str
+    model: str = "claude-3-sonnet"
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Session:
     """Claude Code session."""
     id: str
@@ -203,6 +213,11 @@ class Session:
     checkpoint_id: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     error: Optional[str] = None
+    
+    # Queued prompts system (Claudia API compatibility)
+    queued_prompts: List[QueuedPrompt] = field(default_factory=list)
+    _is_processing: bool = field(default=False, init=False)
+    _queue_processor_task: Optional[asyncio.Task] = field(default=None, init=False)
     
     # Stream handling
     _output_buffer: bytearray = field(default_factory=bytearray, init=False)
@@ -261,8 +276,81 @@ class Session:
                 "checkpoint_count": self.metrics.checkpoint_count,
                 "was_resumed": self.metrics.was_resumed,
                 "model_changes": self.metrics.model_changes
-            }
+            },
+            "queued_prompts": [
+                {
+                    "id": qp.id,
+                    "prompt": qp.prompt,
+                    "model": qp.model,
+                    "timestamp": qp.timestamp.isoformat(),
+                    "metadata": qp.metadata
+                }
+                for qp in self.queued_prompts
+            ],
+            "has_queued_prompts": len(self.queued_prompts) > 0,
+            "queued_prompts_count": len(self.queued_prompts)
         }
+    
+    def queue_prompt(self, prompt: str, model: Optional[str] = None, **metadata) -> QueuedPrompt:
+        """Queue a prompt for later processing (Claudia API compatibility)."""
+        import uuid
+        queued_prompt = QueuedPrompt(
+            id=str(uuid.uuid4()),
+            prompt=prompt,
+            model=model or self.model,
+            metadata=metadata
+        )
+        self.queued_prompts.append(queued_prompt)
+        logger.info(
+            "prompt_queued",
+            session_id=self.id,
+            prompt_id=queued_prompt.id,
+            model=queued_prompt.model,
+            queue_length=len(self.queued_prompts)
+        )
+        return queued_prompt
+    
+    def dequeue_prompt(self) -> Optional[QueuedPrompt]:
+        """Remove and return the next queued prompt."""
+        if self.queued_prompts:
+            prompt = self.queued_prompts.pop(0)
+            logger.info(
+                "prompt_dequeued",
+                session_id=self.id,
+                prompt_id=prompt.id,
+                remaining_queued=len(self.queued_prompts)
+            )
+            return prompt
+        return None
+    
+    def remove_queued_prompt(self, prompt_id: str) -> bool:
+        """Remove a specific queued prompt by ID."""
+        original_length = len(self.queued_prompts)
+        self.queued_prompts = [
+            qp for qp in self.queued_prompts 
+            if qp.id != prompt_id
+        ]
+        removed = len(self.queued_prompts) < original_length
+        if removed:
+            logger.info(
+                "queued_prompt_removed",
+                session_id=self.id,
+                prompt_id=prompt_id,
+                remaining_queued=len(self.queued_prompts)
+            )
+        return removed
+    
+    def clear_queued_prompts(self) -> int:
+        """Clear all queued prompts and return the count cleared."""
+        count = len(self.queued_prompts)
+        self.queued_prompts.clear()
+        if count > 0:
+            logger.info(
+                "queued_prompts_cleared",
+                session_id=self.id,
+                cleared_count=count
+            )
+        return count
 
 
 class SessionManager(BaseManager[Session]):
@@ -578,15 +666,22 @@ class SessionManager(BaseManager[Session]):
         self,
         session_id: str,
         content: str,
-        timeout: Optional[float] = None
-    ) -> None:
+        timeout: Optional[float] = None,
+        model: Optional[str] = None,
+        queue_if_busy: bool = True
+    ) -> Optional[QueuedPrompt]:
         """
-        Send a message to a session.
+        Send a message to a session with queuing support (Claudia API compatibility).
         
         Args:
             session_id: Session ID
             content: Message content
             timeout: Optional timeout
+            model: Optional model override
+            queue_if_busy: Whether to queue if session is busy
+            
+        Returns:
+            QueuedPrompt if message was queued, None if sent directly
             
         Raises:
             ValidationError: If session not found
@@ -596,7 +691,19 @@ class SessionManager(BaseManager[Session]):
         if not session:
             raise ValidationError("session_id", session_id, "Session not found")
         
+        # Queue the prompt if session is busy processing
+        if queue_if_busy and session._is_processing:
+            logger.info(
+                "session_busy_queuing_prompt",
+                session_id=session_id,
+                queue_length=len(session.queued_prompts)
+            )
+            return session.queue_prompt(content, model)
+        
         if session.state != SessionState.RUNNING:
+            # Queue if session is starting
+            if queue_if_busy and session.state == SessionState.STARTING:
+                return session.queue_prompt(content, model)
             raise SystemError(f"Session not in running state: {session.state.value}")
         
         if not session.process or not session.process.stdin:
@@ -604,6 +711,9 @@ class SessionManager(BaseManager[Session]):
         
         with error_context("session_manager", "send_message", session_id=session_id):
             try:
+                # Mark session as processing
+                session._is_processing = True
+                
                 # Add message to history
                 session.add_message("user", content)
                 session.metrics.prompts_sent += 1
@@ -622,7 +732,9 @@ class SessionManager(BaseManager[Session]):
                 await self.process_registry.update_session_metrics(
                     session_id, {
                         "prompts_sent": session.metrics.prompts_sent,
-                        "messages_sent": session.metrics.messages_sent
+                        "messages_sent": session.metrics.messages_sent,
+                        "has_queued_prompts": len(session.queued_prompts) > 0,
+                        "queued_prompts_count": len(session.queued_prompts)
                     }
                 )
                 
@@ -632,12 +744,17 @@ class SessionManager(BaseManager[Session]):
                 logger.debug(
                     "message_sent",
                     session_id=session_id,
-                    content_length=len(content)
+                    content_length=len(content),
+                    queued_prompts=len(session.queued_prompts)
                 )
                 
+                return None  # Message sent directly
+                
             except asyncio.TimeoutError:
+                session._is_processing = False
                 raise TimeoutError(f"Send message timeout after {timeout}s")
             except Exception as e:
+                session._is_processing = False
                 session.metrics.errors_count += 1
                 raise SystemError(f"Failed to send message: {e}") from e
     
@@ -1109,6 +1226,79 @@ class SessionManager(BaseManager[Session]):
                 session_id=session.id
             )
     
+    async def _process_queued_prompts(self, session_id: str) -> None:
+        """Process queued prompts for a session (Claudia API compatibility)."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return
+        
+        # Check if we can process the queue
+        if session._is_processing or session.state != SessionState.RUNNING:
+            return
+        
+        # Get next queued prompt
+        queued_prompt = session.dequeue_prompt()
+        if not queued_prompt:
+            return
+        
+        logger.info(
+            "processing_queued_prompt",
+            session_id=session_id,
+            prompt_id=queued_prompt.id,
+            remaining_queued=len(session.queued_prompts)
+        )
+        
+        try:
+            # Send the queued prompt
+            await self.send_message(
+                session_id,
+                queued_prompt.prompt,
+                model=queued_prompt.model,
+                queue_if_busy=False  # Don't re-queue
+            )
+        except Exception as e:
+            logger.error(
+                "failed_to_process_queued_prompt",
+                session_id=session_id,
+                prompt_id=queued_prompt.id,
+                error=str(e),
+                exc_info=True
+            )
+            # Re-queue the prompt at the front
+            session.queued_prompts.insert(0, queued_prompt)
+    
+    async def mark_session_processing_complete(self, session_id: str) -> None:
+        """Mark a session as no longer processing and trigger queue processing."""
+        session = self._sessions.get(session_id)
+        if not session:
+            return
+        
+        session._is_processing = False
+        
+        # Schedule queue processing after a short delay
+        if session.queued_prompts and not session._queue_processor_task:
+            session._queue_processor_task = asyncio.create_task(
+                self._process_queued_prompts_with_delay(session_id)
+            )
+    
+    async def _process_queued_prompts_with_delay(self, session_id: str) -> None:
+        """Process queued prompts with a delay to ensure UI updates."""
+        try:
+            # Small delay to ensure UI updates (Claudia compatibility)
+            await asyncio.sleep(0.5)
+            
+            session = self._sessions.get(session_id)
+            if session:
+                session._queue_processor_task = None
+                await self._process_queued_prompts(session_id)
+        except Exception as e:
+            logger.error(
+                "queue_processor_error",
+                session_id=session_id,
+                error=str(e),
+                exc_info=True
+            )
+    
     async def _save_session(self, session: Session) -> None:
         """Save session to database."""
         await self.db.execute("""
@@ -1389,4 +1579,5 @@ __all__ = [
     'SessionMessage',
     'SessionMetrics',
     'MessageType',
+    'QueuedPrompt',
 ]

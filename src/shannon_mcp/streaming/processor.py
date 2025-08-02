@@ -466,23 +466,31 @@ class StreamProcessor:
             session.add_message("assistant", session._current_response)
             session._current_response = ""
         
-        # Update session state
-        if session.state == SessionState.RUNNING:
-            session.state = SessionState.COMPLETED
+        # Mark session as no longer processing
+        session._is_processing = False
         
-        session.metrics.end_time = datetime.utcnow()
+        # Don't mark session as completed if there are queued prompts
+        # This maintains compatibility with Claudia's behavior
+        if session.state == SessionState.RUNNING and not session.queued_prompts:
+            session.state = SessionState.COMPLETED
+            session.metrics.end_time = datetime.utcnow()
+        
+        # Update last activity time
+        session.metrics.last_activity_time = datetime.utcnow()
         
         # Save final state
         await self.session_manager._save_session(session)
         
-        # Emit completion event
+        # Emit completion event with queue info (Claudia compatibility)
         await emit(
             "session_completed",
             EventCategory.SESSION,
             {
                 "session_id": session.id,
                 "duration": session.metrics.duration.total_seconds() if session.metrics.duration else 0,
-                "tokens_total": session.metrics.tokens_input + session.metrics.tokens_output
+                "tokens_total": session.metrics.tokens_input + session.metrics.tokens_output,
+                "has_pending_prompts": len(session.queued_prompts) > 0,
+                "pending_prompts_count": len(session.queued_prompts)
             }
         )
         
@@ -491,8 +499,13 @@ class StreamProcessor:
             session_id=session.id,
             lines_processed=self.metrics.lines_processed,
             messages_parsed=self.metrics.messages_parsed,
-            errors=self.metrics.errors_encountered
+            errors=self.metrics.errors_encountered,
+            queued_prompts=len(session.queued_prompts)
         )
+        
+        # Process any queued prompts (Claudia API compatibility)
+        if session.queued_prompts:
+            await self.session_manager.mark_session_processing_complete(session.id)
     
     async def _handle_stream_error(self, session, error: Exception) -> None:
         """Handle stream error."""
