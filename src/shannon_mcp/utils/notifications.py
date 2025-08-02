@@ -51,6 +51,20 @@ class EventCategory(Enum):
     ERROR = "error"
 
 
+class NotificationType(Enum):
+    """Notification types (alias for EventCategory)."""
+    SYSTEM = "system"
+    SESSION = "session"
+    AGENT = "agent"
+    CHECKPOINT = "checkpoint"
+    HOOKS = "hooks"
+    ANALYTICS = "analytics"
+    BINARY = "binary"
+    MCP = "mcp"
+    USER = "user"
+    ERROR = "error"
+
+
 @dataclass
 class Event:
     """Event data structure."""
@@ -666,6 +680,10 @@ class EventHandler:
     pass
 
 
+# Alias for backward compatibility
+NotificationCenter = EventBus
+
+
 # Export public API
 __all__ = [
     'Event',
@@ -684,4 +702,6 @@ __all__ = [
     'EventEmitter',
     'setup_notifications',
     'notify_event',
+    'NotificationCenter',
+    'NotificationType',
 ]

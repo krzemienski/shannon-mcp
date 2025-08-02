@@ -18,7 +18,28 @@ from shannon_mcp.registry.storage import ProcessStatus
 from shannon_mcp.analytics.writer import MetricType
 
 
-class FixtureGenerator:
+class DataGeneratorMixin:
+    """Mixin for common data generation utilities."""
+    
+    @staticmethod
+    def generate_timestamp(offset_hours: int = 0) -> str:
+        """Generate ISO timestamp with optional offset."""
+        dt = datetime.now(timezone.utc) + timedelta(hours=offset_hours)
+        return dt.isoformat()
+    
+    @staticmethod
+    def generate_uuid() -> str:
+        """Generate a UUID string."""
+        return str(uuid.uuid4())
+    
+    @staticmethod
+    def generate_short_id(prefix: str = "") -> str:
+        """Generate a short ID with optional prefix."""
+        suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        return f"{prefix}_{suffix}" if prefix else suffix
+
+
+class FixtureGenerator(DataGeneratorMixin):
     """Generates test fixtures for various components."""
     
     @staticmethod
@@ -380,3 +401,257 @@ class MockDataGenerator:
             content = [FixtureGenerator.generate_random_string(60) for _ in range(lines)]
         
         return '\n'.join(content)
+
+
+class ErrorScenarioGenerator(DataGeneratorMixin):
+    """Generate error scenarios for testing."""
+    
+    ERROR_SCENARIOS = {
+        "network_timeout": {
+            "error_type": "NetworkError",
+            "error_code": "TIMEOUT_ERROR",
+            "message": "Request timed out after 30 seconds",
+            "retryable": True,
+            "retry_after": 5
+        },
+        "rate_limit": {
+            "error_type": "RateLimitError",
+            "error_code": "RATE_LIMIT_EXCEEDED",
+            "message": "Rate limit exceeded: 100 requests per minute",
+            "retryable": True,
+            "retry_after": 60
+        },
+        "validation": {
+            "error_type": "ValidationError",
+            "error_code": "INVALID_INPUT",
+            "message": "Invalid prompt format",
+            "retryable": False,
+            "details": {"field": "prompt", "constraint": "max_length"}
+        },
+        "storage_full": {
+            "error_type": "StorageError",
+            "error_code": "STORAGE_FULL",
+            "message": "Storage space exhausted",
+            "retryable": False,
+            "recovery": "cleanup_required"
+        },
+        "binary_not_found": {
+            "error_type": "BinaryNotFoundError",
+            "error_code": "BINARY_NOT_FOUND",
+            "message": "Claude binary not found in PATH",
+            "retryable": False,
+            "suggestions": ["Install Claude from claude.ai/code", "Check PATH"]
+        }
+    }
+    
+    @classmethod
+    def generate_error_scenario(
+        cls,
+        scenario_type: str,
+        session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Generate a specific error scenario."""
+        scenario = cls.ERROR_SCENARIOS.get(
+            scenario_type,
+            cls.ERROR_SCENARIOS["network_timeout"]
+        )
+        
+        return {
+            "error": scenario.copy(),
+            "context": {
+                "session_id": session_id or FixtureGenerator.generate_session_id(),
+                "timestamp": cls.generate_timestamp(),
+                "component": f"component_{cls.generate_short_id()}",
+                "operation": f"operation_{cls.generate_short_id()}",
+                "request_id": cls.generate_uuid()
+            },
+            "stack_trace": cls._generate_stack_trace(scenario["error_type"])
+        }
+    
+    @staticmethod
+    def _generate_stack_trace(error_type: str) -> str:
+        """Generate realistic stack trace."""
+        return f"""Traceback (most recent call last):
+  File "/app/shannon_mcp/server.py", line 123, in handle_request
+    result = await handler.process(request)
+  File "/app/shannon_mcp/handlers/session.py", line 45, in process
+    raise {error_type}("{error_type} occurred")
+{error_type}: {error_type} occurred"""
+
+
+class PerformanceDataGenerator(DataGeneratorMixin):
+    """Generate performance test data."""
+    
+    @classmethod
+    def generate_load_test_data(
+        cls,
+        sessions: int = 100,
+        messages_per_session: int = 50,
+        duration_hours: int = 1
+    ) -> Dict[str, Any]:
+        """Generate data for load testing."""
+        start_time = datetime.now(timezone.utc)
+        data = {
+            "sessions": [],
+            "messages": [],
+            "metrics": []
+        }
+        
+        # Generate sessions
+        for i in range(sessions):
+            session_start = start_time + timedelta(
+                seconds=random.randint(0, duration_hours * 3600)
+            )
+            session = {
+                "id": FixtureGenerator.generate_session_id(),
+                "start_time": session_start.isoformat(),
+                "duration_seconds": random.randint(60, 1800),
+                "messages_count": messages_per_session
+            }
+            data["sessions"].append(session)
+            
+            # Generate messages for session
+            for j in range(messages_per_session):
+                message_time = session_start + timedelta(
+                    seconds=j * (session["duration_seconds"] / messages_per_session)
+                )
+                message = {
+                    "id": cls.generate_uuid(),
+                    "session_id": session["id"],
+                    "timestamp": message_time.isoformat(),
+                    "type": random.choice(["user", "assistant", "tool_use"]),
+                    "tokens": random.randint(10, 1000),
+                    "latency_ms": random.randint(50, 500)
+                }
+                data["messages"].append(message)
+            
+            # Generate metrics
+            data["metrics"].extend(
+                cls._generate_session_metrics(session, session_start)
+            )
+        
+        return data
+    
+    @classmethod
+    def _generate_session_metrics(
+        cls,
+        session: Dict[str, Any],
+        start_time: datetime
+    ) -> List[Dict[str, Any]]:
+        """Generate metrics for a session."""
+        metrics = []
+        
+        # Session start
+        metrics.append({
+            "type": "session_start",
+            "session_id": session["id"],
+            "timestamp": start_time.isoformat(),
+            "data": {"model": "claude-3-opus"}
+        })
+        
+        # Tool uses
+        for i in range(random.randint(5, 20)):
+            metrics.append({
+                "type": "tool_use",
+                "session_id": session["id"],
+                "timestamp": (start_time + timedelta(seconds=i * 10)).isoformat(),
+                "data": {
+                    "tool": random.choice(["write_file", "read_file", "bash"]),
+                    "duration_ms": random.randint(10, 1000)
+                }
+            })
+        
+        # Session end
+        metrics.append({
+            "type": "session_end",
+            "session_id": session["id"],
+            "timestamp": (
+                start_time + timedelta(seconds=session["duration_seconds"])
+            ).isoformat(),
+            "data": {"status": "completed"}
+        })
+        
+        return metrics
+
+
+class IntegrationTestData(DataGeneratorMixin):
+    """Generate data for integration tests."""
+    
+    @classmethod
+    def generate_multi_agent_workflow(cls) -> Dict[str, Any]:
+        """Generate data for multi-agent workflow testing."""
+        workflow_id = cls.generate_uuid()
+        session_id = FixtureGenerator.generate_session_id()
+        
+        agents = [
+            FixtureGenerator.generate_agent_data(
+                category=AgentCategory.CORE
+            ),
+            FixtureGenerator.generate_agent_data(
+                category=AgentCategory.QUALITY
+            ),
+            FixtureGenerator.generate_agent_data(
+                category=AgentCategory.SPECIALIZED
+            )
+        ]
+        
+        tasks = []
+        for i, agent in enumerate(agents):
+            task = {
+                "id": cls.generate_uuid(),
+                "workflow_id": workflow_id,
+                "agent_id": agent["id"],
+                "session_id": session_id,
+                "order": i,
+                "description": f"Task {i+1} for {agent['name']}",
+                "dependencies": [tasks[-1]["id"]] if tasks else [],
+                "status": "pending",
+                "created_at": cls.generate_timestamp()
+            }
+            tasks.append(task)
+        
+        return {
+            "workflow_id": workflow_id,
+            "session_id": session_id,
+            "agents": agents,
+            "tasks": tasks,
+            "expected_duration_seconds": sum(
+                random.randint(10, 60) for _ in tasks
+            )
+        }
+    
+    @classmethod
+    def generate_checkpoint_tree(
+        cls,
+        depth: int = 3,
+        branches: int = 2
+    ) -> Dict[str, Any]:
+        """Generate checkpoint tree for version control testing."""
+        
+        def create_checkpoint(parent_id: Optional[str], level: int) -> Dict[str, Any]:
+            checkpoint = FixtureGenerator.generate_checkpoint_data()
+            checkpoint["parent_id"] = parent_id
+            checkpoint["level"] = level
+            checkpoint["children"] = []
+            
+            if level < depth:
+                for _ in range(random.randint(1, branches)):
+                    child = create_checkpoint(checkpoint["id"], level + 1)
+                    checkpoint["children"].append(child)
+            
+            return checkpoint
+        
+        root = create_checkpoint(None, 0)
+        return {
+            "root": root,
+            "total_checkpoints": cls._count_checkpoints(root),
+            "max_depth": depth
+        }
+    
+    @staticmethod
+    def _count_checkpoints(checkpoint: Dict[str, Any]) -> int:
+        """Count total checkpoints in tree."""
+        count = 1
+        for child in checkpoint.get("children", []):
+            count += IntegrationTestData._count_checkpoints(child)
+        return count

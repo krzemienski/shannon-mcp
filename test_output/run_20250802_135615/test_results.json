@@ -1,0 +1,12 @@
+{
+  "total": 0,
+  "passed": 0,
+  "failed": 0,
+  "skipped": 0,
+  "errors": 0,
+  "success_rate": 0.0,
+  "coverage": null,
+  "duration": 1.634866714477539,
+  "test_type": "real",
+  "timestamp": "2025-08-02T13:56:17.174328"
+}

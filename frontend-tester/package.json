@@ -1,0 +1,48 @@
+{
+  "name": "shannon-mcp-frontend-tester",
+  "version": "1.0.0",
+  "description": "Frontend testing application for Shannon MCP Server - Tests all 30 MCP tools",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject",
+    "test:e2e": "node src/tests/puppeteer-tests.js",
+    "serve": "serve -s build -p 3000"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "@mui/material": "^5.14.0",
+    "@emotion/react": "^11.11.0",
+    "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.14.0",
+    "axios": "^1.5.0",
+    "socket.io-client": "^4.7.0",
+    "uuid": "^9.0.0",
+    "react-json-view": "^1.21.3",
+    "@monaco-editor/react": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/uuid": "^9.0.0",
+    "puppeteer": "^21.0.0",
+    "serve": "^14.2.0",
+    "typescript": "^5.2.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

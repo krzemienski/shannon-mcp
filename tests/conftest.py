@@ -1,50 +1,34 @@
-"""
-Pytest configuration and shared fixtures for Shannon MCP tests.
-"""
+"""Test configuration for Shannon MCP - Real System Tests"""
 
 import pytest
 import asyncio
 import tempfile
 import shutil
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import Generator, AsyncGenerator, Dict, Any
-import aiosqlite
-import json
 import os
+from pathlib import Path
+from typing import AsyncGenerator, Generator
+import aiosqlite
 
 # Add src to path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from shannon_mcp.utils.config import Config
-from shannon_mcp.storage.database import Database
-from shannon_mcp.managers.binary import BinaryManager
-from shannon_mcp.managers.session import SessionManager
-from shannon_mcp.managers.agent import AgentManager
-from shannon_mcp.registry.storage import RegistryStorage
-from shannon_mcp.analytics.writer import JSONLWriter
+from shannon_mcp.utils.config import ShannonConfig, get_config
 from shannon_mcp.utils.logging import setup_logging
-
 
 # Test configuration
 TEST_CONFIG = {
-    "binary": {
-        "discovery_timeout": 5.0,
-        "update_check_interval": 3600,
-        "cache_ttl": 1800
-    },
-    "session": {
-        "default_timeout": 30.0,
-        "max_concurrent": 3,
-        "cache_size": 10
-    },
-    "logging": {
-        "level": "DEBUG",
-        "format": "simple"
-    }
+    "binary_search_paths": [
+        "/usr/local/bin",
+        "/usr/bin",
+        "~/.local/bin",
+    ],
+    "session_timeout": 30,
+    "max_concurrent_sessions": 5,
+    "checkpoint_interval": 60,
+    "analytics_enabled": True,
+    "agent_cache_size": 100,
 }
-
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -53,182 +37,117 @@ def event_loop():
     yield loop
     loop.close()
 
-
 @pytest.fixture
-def temp_dir() -> Generator[Path, None, None]:
-    """Create a temporary directory for tests."""
-    temp_path = Path(tempfile.mkdtemp())
+def real_temp_dir() -> Generator[Path, None, None]:
+    """Create a real temporary directory for testing."""
+    temp_dir = tempfile.mkdtemp(prefix="shannon_test_")
+    temp_path = Path(temp_dir)
+    
+    # Create subdirectories
+    (temp_path / "logs").mkdir()
+    (temp_path / "storage").mkdir()
+    (temp_path / "cache").mkdir()
+    (temp_path / "checkpoints").mkdir()
+    
     yield temp_path
-    shutil.rmtree(temp_path)
-
+    
+    # Cleanup
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 @pytest.fixture
-async def test_db(temp_dir: Path) -> AsyncGenerator[Database, None]:
-    """Create a test database."""
-    db_path = temp_dir / "test.db"
-    db = Database(db_path)
-    await db.initialize()
+async def real_sqlite_db(real_temp_dir: Path) -> AsyncGenerator[aiosqlite.Connection, None]:
+    """Create a real SQLite database for testing."""
+    db_path = real_temp_dir / "test.db"
+    
+    # Create and initialize database
+    async with aiosqlite.connect(str(db_path)) as db:
+        # Create basic tables
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                config TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                hash TEXT NOT NULL,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            )
+        """)
+        
+        await db.commit()
+        
+    # Return connection
+    db = await aiosqlite.connect(str(db_path))
     yield db
     await db.close()
 
+@pytest.fixture
+def real_server_state(real_temp_dir: Path) -> dict:
+    """Create a real server state for testing."""
+    return {
+        "temp_dir": real_temp_dir,
+        "config": ShannonConfig(**TEST_CONFIG),
+        "sessions": {},
+        "agents": {},
+        "processes": {},
+        "managers": {},  # Add managers dict for tests
+        "is_running": True,
+    }
 
 @pytest.fixture
-def test_config(temp_dir: Path) -> Config:
-    """Create test configuration."""
-    config_path = temp_dir / "config.json"
-    config_path.write_text(json.dumps(TEST_CONFIG))
-    
-    config = Config()
-    config._config = TEST_CONFIG
-    config._config_path = config_path
-    return config
-
-
-@pytest.fixture
-async def binary_manager(test_db: Database, test_config: Config) -> AsyncGenerator[BinaryManager, None]:
-    """Create a test binary manager."""
-    manager = BinaryManager(test_db, test_config)
-    await manager.start()
-    yield manager
-    await manager.stop()
-
-
-@pytest.fixture
-async def session_manager(test_db: Database, test_config: Config, binary_manager: BinaryManager) -> AsyncGenerator[SessionManager, None]:
-    """Create a test session manager."""
-    manager = SessionManager(test_db, test_config, binary_manager)
-    await manager.start()
-    yield manager
-    await manager.stop()
-
-
-@pytest.fixture
-async def agent_manager(test_db: Database, test_config: Config) -> AsyncGenerator[AgentManager, None]:
-    """Create a test agent manager."""
-    manager = AgentManager(test_db, test_config)
-    await manager.start()
-    yield manager
-    await manager.stop()
-
-
-@pytest.fixture
-async def registry_storage(temp_dir: Path) -> AsyncGenerator[RegistryStorage, None]:
-    """Create test registry storage."""
-    db_path = temp_dir / "registry.db"
-    storage = RegistryStorage(db_path)
-    await storage.initialize()
-    yield storage
-    await storage.close()
-
-
-@pytest.fixture
-async def analytics_writer(temp_dir: Path) -> AsyncGenerator[JSONLWriter, None]:
-    """Create test analytics writer."""
-    analytics_dir = temp_dir / "analytics"
-    writer = JSONLWriter(analytics_dir)
-    await writer.initialize()
-    yield writer
-    await writer.close()
-
-
-@pytest.fixture
-def mock_claude_binary(temp_dir: Path) -> Path:
+def real_binary_path(real_temp_dir: Path) -> Path:
     """Create a mock Claude binary for testing."""
-    if os.name == 'nt':
-        binary_path = temp_dir / "claude.exe"
-        binary_path.write_text("@echo off\necho Claude Code v1.0.0\n")
-    else:
-        binary_path = temp_dir / "claude"
-        binary_path.write_text("#!/bin/bash\necho 'Claude Code v1.0.0'\n")
-        binary_path.chmod(0o755)
+    bin_dir = real_temp_dir / "bin"
+    bin_dir.mkdir()
     
-    return binary_path
+    # Create mock Claude binary
+    claude_path = bin_dir / "claude"
+    claude_path.write_text("""#!/bin/bash
+echo "Claude Code CLI v1.0.0-test"
+echo "MCP Server Mode"
 
+# Simple mock that reads JSON and responds
+while IFS= read -r line; do
+    if [[ "$line" == *"initialize"* ]]; then
+        echo '{"jsonrpc": "2.0", "result": {"capabilities": {}}, "id": 1}'
+    elif [[ "$line" == *"exit"* ]]; then
+        break
+    else
+        echo '{"jsonrpc": "2.0", "result": {}, "id": 1}'
+    fi
+done
+""")
+    claude_path.chmod(0o755)
+    
+    return claude_path
 
-@pytest.fixture
-def sample_agent_data() -> Dict[str, Any]:
-    """Sample agent data for testing."""
-    return {
-        "name": "test-agent",
-        "description": "A test agent for unit tests",
-        "system_prompt": "You are a test agent.",
-        "category": "testing",
-        "capabilities": ["test", "debug"],
-        "metadata": {
-            "version": "1.0.0",
-            "author": "Test Suite"
-        }
-    }
+# Configure pytest
+def pytest_configure(config):
+    """Configure pytest with custom markers."""
+    config.addinivalue_line("markers", "real_system: marks tests that use real system resources")
+    config.addinivalue_line("markers", "requires_claude: marks tests that require Claude binary")
+    config.addinivalue_line("markers", "slow: marks tests as slow")
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "e2e: marks tests as end-to-end tests")
 
-
-@pytest.fixture
-def sample_session_data() -> Dict[str, Any]:
-    """Sample session data for testing."""
-    return {
-        "id": "test-session-123",
-        "project_path": "/test/project",
-        "prompt": "Test prompt",
-        "model": "claude-3-opus",
-        "temperature": 0.7,
-        "max_tokens": 4096
-    }
-
-
-@pytest.fixture
-def sample_metrics_data() -> list:
-    """Sample metrics data for testing."""
-    now = datetime.now(timezone.utc)
-    return [
-        {
-            "id": "metric-1",
-            "timestamp": now.isoformat(),
-            "type": "session_start",
-            "session_id": "session-1",
-            "data": {"project_path": "/test/project"}
-        },
-        {
-            "id": "metric-2",
-            "timestamp": now.isoformat(),
-            "type": "tool_use",
-            "session_id": "session-1",
-            "data": {"tool_name": "write_file", "success": True}
-        },
-        {
-            "id": "metric-3",
-            "timestamp": now.isoformat(),
-            "type": "session_end",
-            "session_id": "session-1",
-            "data": {"duration_seconds": 120, "token_count": 1500}
-        }
-    ]
-
-
-@pytest.fixture
-def mock_process_info():
-    """Mock process information for testing."""
-    return {
-        "pid": 12345,
-        "name": "claude",
-        "cmdline": ["claude", "--session", "test-123"],
-        "create_time": datetime.now(timezone.utc),
-        "status": "running",
-        "username": "testuser",
-        "cpu_percent": 15.5,
-        "memory_info": {"rss": 100 * 1024 * 1024},  # 100MB
-        "num_threads": 4
-    }
-
-
-# Async test helpers
-async def wait_for_condition(condition_func, timeout=5.0, interval=0.1):
-    """Wait for a condition to become true."""
-    start = asyncio.get_event_loop().time()
-    while asyncio.get_event_loop().time() - start < timeout:
-        if await condition_func():
-            return True
-        await asyncio.sleep(interval)
-    return False
-
-
-# Logging setup for tests
-setup_logging(level="DEBUG", format_type="simple")
+# Setup logging for tests
+setup_logging(log_level="DEBUG", log_dir=None)

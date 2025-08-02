@@ -186,6 +186,17 @@ class ConfigurationError(ShannonError):
         ]
 
 
+# Storage Errors
+
+class StorageError(ShannonError):
+    """Storage-related errors."""
+    code = "STORAGE_ERROR"
+    default_message = "Storage operation failed"
+    category = ErrorCategory.DATABASE
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
+
+
 # Network Errors
 
 class NetworkError(ShannonError):
@@ -313,6 +324,14 @@ class AuthorizationError(ShannonError):
     severity = ErrorSeverity.WARNING
 
 
+class SecurityError(ShannonError):
+    """Security-related errors."""
+    code = "SECURITY_ERROR"
+    default_message = "Security violation detected"
+    category = ErrorCategory.AUTHORIZATION
+    severity = ErrorSeverity.CRITICAL
+
+
 # MCP Protocol Errors
 
 class MCPError(ShannonError):
@@ -418,6 +437,20 @@ class ExternalServiceError(ShannonError):
     
     def get_retry_after(self) -> Optional[int]:
         return 30  # 30 seconds
+
+
+class HookExecutionError(ShannonError):
+    """Hook execution error."""
+    code = "HOOK_EXECUTION_ERROR"
+    default_message = "Hook execution failed"
+    category = ErrorCategory.RUNTIME
+    severity = ErrorSeverity.ERROR
+    
+    def __init__(self, hook_name: str, action_type: str, **kwargs):
+        self.hook_name = hook_name
+        self.action_type = action_type
+        message = f"Hook '{hook_name}' failed during {action_type} action"
+        super().__init__(message, hook_name=hook_name, action_type=action_type, **kwargs)
 
 
 # Error Handler Decorator
@@ -676,6 +709,7 @@ __all__ = [
     'ValidationError',
     'AuthenticationError',
     'AuthorizationError',
+    'SecurityError',
     'MCPError',
     'ShannonMCPError',
     'SessionNotFoundError',
@@ -685,6 +719,7 @@ __all__ = [
     'RateLimitError',
     'StreamError',
     'ExternalServiceError',
+    'HookExecutionError',
     
     # Utilities
     'handle_errors',
