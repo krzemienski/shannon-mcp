@@ -3700,6 +3700,203 @@ async def clear_project_sessions(
         return {"error": f"Failed to clear project sessions: {str(e)}"}
 
 
+@mcp_server.tool("get_session_error_report")
+@require_initialized
+async def get_session_error_report(
+    session_id: Optional[str] = None,
+    time_window_hours: Optional[int] = None,
+    format: str = "json"
+) -> Dict[str, Any]:
+    """
+    Get error report for sessions (Claudia API compatibility).
+    
+    Args:
+        session_id: Specific session ID (optional)
+        time_window_hours: Hours to look back (optional)
+        format: Report format (json, markdown)
+        
+    Returns:
+        Error report
+    """
+    logger.debug(f"Tool called: get_session_error_report(session_id={session_id})")
+    
+    try:
+        time_window = None
+        if time_window_hours:
+            from datetime import timedelta
+            time_window = timedelta(hours=time_window_hours)
+        
+        report = await state.managers['session'].get_session_error_report(
+            session_id=session_id,
+            time_window=time_window,
+            format=format
+        )
+        
+        if format == "json":
+            import json
+            report_data = json.loads(report)
+            return {
+                "report": report_data,
+                "format": format,
+                "session_id": session_id,
+                "time_window_hours": time_window_hours,
+                "generated_at": datetime.now(timezone.utc).isoformat()
+            }
+        else:
+            return {
+                "report": report,
+                "format": format,
+                "session_id": session_id,
+                "time_window_hours": time_window_hours,
+                "generated_at": datetime.now(timezone.utc).isoformat()
+            }
+        
+    except Exception as e:
+        logger.error(f"Error getting error report: {e}", exc_info=True)
+        return {"error": f"Failed to get error report: {str(e)}"}
+
+
+@mcp_server.tool("get_error_statistics")
+@require_initialized
+async def get_error_statistics(
+    session_id: Optional[str] = None,
+    time_window_hours: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Get error statistics (Claudia API compatibility).
+    
+    Args:
+        session_id: Filter by session
+        time_window_hours: Hours to look back
+        
+    Returns:
+        Error statistics
+    """
+    logger.debug(f"Tool called: get_error_statistics(session_id={session_id})")
+    
+    try:
+        time_window = None
+        if time_window_hours:
+            from datetime import timedelta
+            time_window = timedelta(hours=time_window_hours)
+        
+        stats = await state.managers['session'].get_error_statistics(
+            session_id=session_id,
+            time_window=time_window
+        )
+        
+        return {
+            "statistics": stats,
+            "session_id": session_id,
+            "time_window_hours": time_window_hours,
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting error statistics: {e}", exc_info=True)
+        return {"error": f"Failed to get error statistics: {str(e)}"}
+
+
+@mcp_server.tool("resolve_session_error")
+@require_initialized
+async def resolve_session_error(
+    error_id: str,
+    resolution_notes: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Mark an error as resolved (Claudia API compatibility).
+    
+    Args:
+        error_id: Error ID to resolve
+        resolution_notes: Notes about the resolution
+        
+    Returns:
+        Resolution status
+    """
+    logger.debug(f"Tool called: resolve_session_error(error_id={error_id})")
+    
+    try:
+        resolved = await state.managers['session'].resolve_session_error(
+            error_id=error_id,
+            resolution_notes=resolution_notes
+        )
+        
+        result = {
+            "resolved": resolved,
+            "error_id": error_id,
+            "resolution_notes": resolution_notes,
+            "resolved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        if resolved:
+            logger.info(f"Error resolved", extra={"error_id": error_id})
+        else:
+            logger.warning(f"Error not found", extra={"error_id": error_id})
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error resolving error: {e}", exc_info=True)
+        return {"error": f"Failed to resolve error: {str(e)}"}
+
+
+@mcp_server.tool("track_session_error")
+@require_initialized
+async def track_session_error(
+    session_id: str,
+    error_type: str,
+    error_message: str,
+    metadata: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Manually track an error for a session (Claudia API compatibility).
+    
+    Args:
+        session_id: Session ID
+        error_type: Type of error
+        error_message: Error message
+        metadata: Additional metadata
+        
+    Returns:
+        Tracking confirmation
+    """
+    logger.debug(f"Tool called: track_session_error(session_id={session_id}, error_type={error_type})")
+    
+    try:
+        # Create an exception object
+        error = Exception(f"{error_type}: {error_message}")
+        
+        # Track the error
+        await state.managers['session'].track_session_error(
+            session_id=session_id,
+            error=error,
+            metadata={
+                "error_type": error_type,
+                "manual_tracking": True,
+                **(metadata or {})
+            }
+        )
+        
+        result = {
+            "tracked": True,
+            "session_id": session_id,
+            "error_type": error_type,
+            "error_message": error_message,
+            "tracked_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Error tracked manually", extra={
+            "session_id": session_id,
+            "error_type": error_type
+        })
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error tracking error: {e}", exc_info=True)
+        return {"error": f"Failed to track error: {str(e)}"}
+
+
 # Claude Code Session Streaming Resource
 # ================================
 # This resource provides real-time streaming output (replaces Tauri events from Claudia)

@@ -283,7 +283,7 @@ class StreamProcessor:
                 )
     
     async def _handle_error(self, message: Dict[str, Any], session) -> None:
-        """Handle error message."""
+        """Handle error message with enhanced error tracking."""
         error_type = message.get("error_type", "unknown")
         error_msg = message.get("message", "Unknown error")
         
@@ -296,6 +296,18 @@ class StreamProcessor:
         
         session.error = f"{error_type}: {error_msg}"
         session.metrics.errors_count += 1
+        
+        # Track error with enhanced system (Claudia compatibility)
+        error_exception = Exception(f"{error_type}: {error_msg}")
+        await self.session_manager.track_session_error(
+            session_id=session.id,
+            error=error_exception,
+            metadata={
+                "error_type": error_type,
+                "message_data": message,
+                "stream_position": self.metrics.messages_parsed
+            }
+        )
         
         # Emit error event
         await emit(

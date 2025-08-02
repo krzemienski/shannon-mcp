@@ -380,6 +380,10 @@ class SessionManager(BaseManager[Session]):
         # Initialize message filter manager
         self.filter_manager = MessageFilterManager()
         
+        # Initialize error tracker
+        from .error_tracker import ErrorTracker
+        self.error_tracker = ErrorTracker()
+        
         # Initialize process registry for tracking running sessions
         registry_config = ProcessRegistryConfig(
             name="session_process_registry",
@@ -1906,6 +1910,151 @@ class SessionManager(BaseManager[Session]):
         )
         
         return cleared_count
+    
+    async def track_session_error(
+        self,
+        session_id: str,
+        error: Exception,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Track an error for a session (Claudia compatibility).
+        
+        Args:
+            session_id: Session ID
+            error: The error to track
+            metadata: Additional metadata
+        """
+        session = self._sessions.get(session_id)
+        if session:
+            # Update session metrics
+            session.metrics.track_error()
+            
+            # Track in error tracker
+            from ..utils.errors import ErrorContext
+            context = ErrorContext(
+                session_id=session_id,
+                component="session_manager",
+                operation="session_execution",
+                metadata=metadata or {}
+            )
+            
+            await self.error_tracker.track_error(
+                error=error,
+                context=context,
+                metadata={
+                    "model": session.model,
+                    "project_path": session.project_path,
+                    "prompts_sent": session.metrics.prompts_sent,
+                    "tools_executed": session.metrics.tools_executed
+                }
+            )
+    
+    async def get_session_error_report(
+        self,
+        session_id: Optional[str] = None,
+        time_window: Optional[timedelta] = None,
+        format: str = "json"
+    ) -> str:
+        """
+        Get error report for sessions.
+        
+        Args:
+            session_id: Specific session ID (optional)
+            time_window: Time window for report
+            format: Report format (json, markdown)
+            
+        Returns:
+            Formatted error report
+        """
+        if session_id:
+            # Get errors for specific session
+            errors = await self.error_tracker.get_session_errors(session_id)
+            
+            # Create session-specific report
+            if format == "json":
+                report_data = {
+                    "session_id": session_id,
+                    "error_count": len(errors),
+                    "errors": [
+                        {
+                            "id": err.id,
+                            "timestamp": err.timestamp.isoformat(),
+                            "type": err.error_type,
+                            "message": err.error_message,
+                            "severity": err.severity.value,
+                            "pattern": err.pattern.value,
+                            "resolved": err.resolved
+                        }
+                        for err in errors
+                    ]
+                }
+                return json.dumps(report_data, indent=2)
+            else:
+                # Markdown format
+                report = f"# Error Report for Session {session_id}\n\n"
+                report += f"Total errors: {len(errors)}\n\n"
+                for err in errors:
+                    status = "✓ Resolved" if err.resolved else "❌ Unresolved"
+                    report += f"- **{err.error_type}** ({err.timestamp.isoformat()}): {err.error_message} [{status}]\n"
+                return report
+        else:
+            # General error report
+            return await self.error_tracker.generate_error_report(
+                time_window=time_window,
+                format=format
+            )
+    
+    async def get_error_statistics(
+        self,
+        session_id: Optional[str] = None,
+        time_window: Optional[timedelta] = None
+    ) -> Dict[str, Any]:
+        """
+        Get error statistics.
+        
+        Args:
+            session_id: Filter by session
+            time_window: Time window for statistics
+            
+        Returns:
+            Error statistics
+        """
+        stats = await self.error_tracker.get_error_statistics(
+            session_id=session_id,
+            time_window=time_window
+        )
+        
+        return {
+            "total_errors": stats.total_errors,
+            "errors_by_severity": stats.errors_by_severity,
+            "errors_by_category": stats.errors_by_category,
+            "errors_by_pattern": stats.errors_by_pattern,
+            "error_rate_per_minute": stats.error_rate_per_minute,
+            "resolution_rate": stats.resolution_rate,
+            "average_resolution_time": str(stats.average_resolution_time) if stats.average_resolution_time else None,
+            "most_common_errors": stats.most_common_errors
+        }
+    
+    async def resolve_session_error(
+        self,
+        error_id: str,
+        resolution_notes: Optional[str] = None
+    ) -> bool:
+        """
+        Mark an error as resolved.
+        
+        Args:
+            error_id: Error ID to resolve
+            resolution_notes: Notes about the resolution
+            
+        Returns:
+            True if resolved, False if not found
+        """
+        return await self.error_tracker.resolve_error(
+            error_id=error_id,
+            resolution_notes=resolution_notes
+        )
 
 
 # Export public API
