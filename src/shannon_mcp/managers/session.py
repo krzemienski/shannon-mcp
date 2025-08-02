@@ -38,6 +38,7 @@ from ..utils.shutdown import track_request_lifetime, register_shutdown_handler, 
 from ..utils.logging import get_logger
 from .cache import SessionCache
 from .message_filter import MessageFilterManager, MessageFilter, FilterType, FilterProfile
+from .tool_result_handler import ToolResultHandler, ToolResult, ToolCategory
 
 
 logger = get_logger("shannon-mcp.session")
@@ -223,6 +224,9 @@ class Session:
     queued_prompts: List[QueuedPrompt] = field(default_factory=list)
     _is_processing: bool = field(default=False, init=False)
     _queue_processor_task: Optional[asyncio.Task] = field(default=None, init=False)
+    
+    # Tool result handling
+    tool_results: ToolResultHandler = field(default_factory=ToolResultHandler, init=False)
     
     # Stream handling
     _output_buffer: bytearray = field(default_factory=bytearray, init=False)
@@ -1447,6 +1451,75 @@ class SessionManager(BaseManager[Session]):
                 error=str(e),
                 exc_info=True
             )
+    
+    # Tool result handling methods (Claudia compatibility)
+    
+    async def track_tool_result(self, 
+                              session_id: str,
+                              tool_name: str,
+                              tool_use_id: str,
+                              result: Any) -> None:
+        """Track a tool result for a session."""
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        
+        # Process and store the tool result
+        tool_result = session.tool_results.process_tool_result(
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            raw_result=result
+        )
+        
+        # Update metrics based on result
+        if tool_result.is_error:
+            session.metrics.tools_failed += 1
+        
+        logger.info(
+            "tool_result_tracked",
+            session_id=session_id,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            category=tool_result.category.value,
+            is_error=tool_result.is_error
+        )
+    
+    async def get_tool_results(self,
+                             session_id: str,
+                             filters: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Get tool results for a session with optional filtering."""
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        
+        return session.tool_results.export_results(filters)
+    
+    async def get_tool_result_by_id(self,
+                                  session_id: str,
+                                  tool_use_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific tool result by ID."""
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        
+        result = session.tool_results.results_cache.get(tool_use_id)
+        if result:
+            return session.tool_results.format_result_for_display(result)
+        return None
+    
+    async def get_tool_filters(self, session_id: str) -> List[Dict[str, str]]:
+        """Get available tool result filters."""
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        
+        return [
+            {
+                "name": f.name,
+                "description": f.description
+            }
+            for f in session.tool_results.filters
+        ]
     
     async def _save_session(self, session: Session) -> None:
         """Save session to database."""

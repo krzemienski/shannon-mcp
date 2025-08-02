@@ -29,6 +29,7 @@ from .managers.hook import HookManager
 from .managers.analytics import AnalyticsManager
 from .managers.process_registry import ProcessRegistryManager
 from .managers.project import ProjectManager, ProjectManagerConfig
+from .managers.tool_result_handler import ToolCategory
 from .utils.config import load_config, get_config, ShannonConfig
 from .utils.logging import setup_logging, get_logger
 from .utils.notifications import setup_notifications, notify_event
@@ -3895,6 +3896,147 @@ async def track_session_error(
     except Exception as e:
         logger.error(f"Error tracking error: {e}", exc_info=True)
         return {"error": f"Failed to track error: {str(e)}"}
+
+
+# Tool result handling tools (Claudia compatibility)
+
+@mcp_server.tool("get_tool_results")
+@require_initialized
+async def get_tool_results(
+    session_id: str,
+    filters: Optional[List[str]] = None,
+    limit: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Get tool results for a session with optional filtering.
+    
+    Args:
+        session_id: Session ID
+        filters: List of filter names to apply (e.g., ["errors_only", "category_web"])
+        limit: Maximum number of results to return
+        
+    Returns:
+        Tool results with metadata and formatting
+    """
+    logger.debug(f"Tool called: get_tool_results(session_id={session_id}, filters={filters})")
+    
+    try:
+        # Get filtered results
+        results = await state.managers['session'].get_tool_results(session_id, filters)
+        
+        # Apply limit if specified
+        if limit and "results" in results:
+            results["results"] = results["results"][:limit]
+            results["limited"] = True
+            results["limit"] = limit
+        
+        return results
+    except ValueError as e:
+        logger.error(f"Session not found: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting tool results: {e}", exc_info=True)
+        return {"error": f"Failed to get tool results: {str(e)}"}
+
+
+@mcp_server.tool("get_tool_result_by_id")
+@require_initialized
+async def get_tool_result_by_id(
+    session_id: str,
+    tool_use_id: str
+) -> Dict[str, Any]:
+    """
+    Get a specific tool result by its ID.
+    
+    Args:
+        session_id: Session ID
+        tool_use_id: Tool use ID
+        
+    Returns:
+        Tool result details with formatting
+    """
+    logger.debug(f"Tool called: get_tool_result_by_id(session_id={session_id}, tool_use_id={tool_use_id})")
+    
+    try:
+        result = await state.managers['session'].get_tool_result_by_id(session_id, tool_use_id)
+        
+        if result:
+            return {"status": "success", "result": result}
+        else:
+            return {"status": "not_found", "message": f"Tool result {tool_use_id} not found"}
+            
+    except ValueError as e:
+        logger.error(f"Session not found: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting tool result: {e}", exc_info=True)
+        return {"error": f"Failed to get tool result: {str(e)}"}
+
+
+@mcp_server.tool("get_tool_result_filters")
+@require_initialized
+async def get_tool_result_filters(session_id: str) -> Dict[str, Any]:
+    """
+    Get available tool result filters for a session.
+    
+    Args:
+        session_id: Session ID
+        
+    Returns:
+        List of available filters with descriptions
+    """
+    logger.debug(f"Tool called: get_tool_result_filters(session_id={session_id})")
+    
+    try:
+        filters = await state.managers['session'].get_tool_filters(session_id)
+        
+        return {
+            "status": "success",
+            "filters": filters,
+            "categories": [cat.value for cat in ToolCategory]
+        }
+    except ValueError as e:
+        logger.error(f"Session not found: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting filters: {e}", exc_info=True)
+        return {"error": f"Failed to get filters: {str(e)}"}
+
+
+@mcp_server.tool("get_tool_results_by_category")
+@require_initialized
+async def get_tool_results_by_category(
+    session_id: str,
+    category: str
+) -> Dict[str, Any]:
+    """
+    Get tool results filtered by category.
+    
+    Args:
+        session_id: Session ID
+        category: Tool category (file_system, code_editing, search, execution, web, todo, mcp, generic)
+        
+    Returns:
+        Tool results in the specified category
+    """
+    logger.debug(f"Tool called: get_tool_results_by_category(session_id={session_id}, category={category})")
+    
+    try:
+        # Use category filter
+        filter_name = f"category_{category}"
+        results = await state.managers['session'].get_tool_results(session_id, [filter_name])
+        
+        return {
+            "status": "success",
+            "category": category,
+            "results": results
+        }
+    except ValueError as e:
+        logger.error(f"Session not found: {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error getting category results: {e}", exc_info=True)
+        return {"error": f"Failed to get category results: {str(e)}"}
 
 
 # Claude Code Session Streaming Resource

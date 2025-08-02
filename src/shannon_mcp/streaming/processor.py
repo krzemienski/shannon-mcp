@@ -12,6 +12,7 @@ This module handles JSONL stream processing from Claude Code with:
 
 import asyncio
 import json
+import uuid
 from typing import Optional, Dict, Any, Callable, AsyncIterator
 from dataclasses import dataclass
 import structlog
@@ -67,6 +68,8 @@ class StreamProcessor:
             "debug": self._handle_debug,
             "status": self._handle_status,
             "checkpoint": self._handle_checkpoint,
+            "tool_use": self._handle_tool_use,
+            "tool_result": self._handle_tool_result,
         }
     
     async def process_session(self, session) -> None:
@@ -439,6 +442,73 @@ class StreamProcessor:
                 "data": checkpoint_data
             }
         )
+    
+    async def _handle_tool_use(self, message: Dict[str, Any], session) -> None:
+        """Handle tool use message."""
+        tool_name = message.get("tool_name", "unknown")
+        tool_use_id = message.get("tool_use_id", str(uuid.uuid4()))
+        arguments = message.get("arguments", {})
+        
+        logger.info(
+            "tool_use_started",
+            session_id=session.id,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id
+        )
+        
+        # Track tool execution start
+        session.metrics.tools_executed += 1
+        session.metrics.last_activity_time = datetime.utcnow()
+        
+        # Track specific file operations
+        tool_lower = tool_name.lower()
+        if "create" in tool_lower or "write" in tool_lower:
+            session.metrics.track_file_operation("create")
+        elif "edit" in tool_lower or "multiedit" in tool_lower:
+            session.metrics.track_file_operation("modify")
+        elif "delete" in tool_lower or "remove" in tool_lower:
+            session.metrics.track_file_operation("delete")
+        
+        # Store tool use context for result matching
+        if "tool_uses" not in session.context:
+            session.context["tool_uses"] = {}
+        session.context["tool_uses"][tool_use_id] = {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    
+    async def _handle_tool_result(self, message: Dict[str, Any], session) -> None:
+        """Handle tool result message."""
+        tool_use_id = message.get("tool_use_id", "")
+        result = message.get("result", {})
+        is_error = message.get("is_error", False)
+        
+        # Get tool name from context
+        tool_name = "unknown"
+        if "tool_uses" in session.context and tool_use_id in session.context["tool_uses"]:
+            tool_name = session.context["tool_uses"][tool_use_id]["tool_name"]
+        
+        logger.info(
+            "tool_result_received",
+            session_id=session.id,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            is_error=is_error
+        )
+        
+        # Track the tool result
+        await self.session_manager.track_tool_result(
+            session_id=session.id,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            result=result
+        )
+        
+        # Update metrics
+        if is_error:
+            session.metrics.tools_failed += 1
+            session.metrics.track_error()
     
     async def _handle_unknown(self, message: Dict[str, Any], session) -> None:
         """Handle unknown message type."""
