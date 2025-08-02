@@ -1010,6 +1010,7 @@ async def create_session(
     prompt: str,
     model: str = "claude-3-sonnet",
     project_id: Optional[str] = None,
+    project_path: Optional[str] = None,
     checkpoint_id: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     options: Optional[Dict[str, Any]] = None
@@ -1021,6 +1022,7 @@ async def create_session(
         prompt: Initial prompt for the session (validated for length/content)
         model: Model to use (validated against available models)
         project_id: Optional project to add this session to
+        project_path: Optional project path for organization (Claudia compatibility)
         checkpoint_id: Optional checkpoint to restore from
         context: Additional context including files, dependencies, environment
         options: Advanced options (streaming, hooks, analytics, etc.)
@@ -1028,7 +1030,7 @@ async def create_session(
     Returns:
         Complete session information with ID, status, and metadata
     """
-    logger.debug(f"Tool called: create_session with project_id={project_id}")
+    logger.debug(f"Tool called: create_session with project_id={project_id}, project_path={project_path}")
     
     try:
         # Validate inputs
@@ -1058,7 +1060,7 @@ async def create_session(
             model=model,
             checkpoint_id=checkpoint_id,
             context=context or {},
-            options=options or {}
+            project_path=project_path
         )
         
         # Add session to project if specified
@@ -1085,6 +1087,7 @@ async def create_session(
             "status": "created",
             "session": session.to_dict(),
             "project_id": project_id,
+            "project_path": project_path,
             "metadata": {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "estimated_tokens": len(prompt.split()) * 1.3,  # Rough estimate
@@ -3525,6 +3528,176 @@ async def get_message_filter_profiles() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error getting filter profiles: {e}", exc_info=True)
         return {"error": f"Failed to get filter profiles: {str(e)}"}
+
+
+@mcp_server.tool("get_sessions_by_project")
+@require_initialized
+async def get_sessions_by_project(
+    project_path: Optional[str] = None,
+    project_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get all sessions for a project (Claudia API compatibility).
+    
+    Args:
+        project_path: Project path to filter by
+        project_id: Project ID to filter by
+        
+    Returns:
+        Dict with list of sessions for the project
+    """
+    logger.debug(f"Tool called: get_sessions_by_project(project_path={project_path}, project_id={project_id})")
+    
+    try:
+        sessions = await state.managers['session'].get_sessions_by_project(
+            project_path=project_path,
+            project_id=project_id
+        )
+        
+        result = {
+            "sessions": [session.to_dict() for session in sessions],
+            "count": len(sessions),
+            "project_path": project_path,
+            "project_id": project_id,
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Retrieved sessions by project", extra={
+            "project_path": project_path,
+            "project_id": project_id,
+            "count": len(sessions)
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting sessions by project: {e}", exc_info=True)
+        return {"error": f"Failed to get sessions by project: {str(e)}"}
+
+
+@mcp_server.tool("get_project_session_history")
+@require_initialized
+async def get_project_session_history(
+    project_path: Optional[str] = None,
+    project_id: Optional[str] = None,
+    include_messages: bool = True,
+    limit: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Get session history for a project (Claudia API compatibility).
+    
+    Args:
+        project_path: Project path to filter by
+        project_id: Project ID to filter by
+        include_messages: Whether to include message history
+        limit: Maximum number of sessions to return
+        
+    Returns:
+        Dict with project session history
+    """
+    logger.debug(f"Tool called: get_project_session_history(project_path={project_path}, project_id={project_id})")
+    
+    try:
+        history = await state.managers['session'].get_project_session_history(
+            project_path=project_path,
+            project_id=project_id,
+            include_messages=include_messages,
+            limit=limit
+        )
+        
+        result = {
+            "history": history,
+            "count": len(history),
+            "project_path": project_path,
+            "project_id": project_id,
+            "include_messages": include_messages,
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Retrieved project session history", extra={
+            "project_path": project_path,
+            "project_id": project_id,
+            "count": len(history)
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting project session history: {e}", exc_info=True)
+        return {"error": f"Failed to get project session history: {str(e)}"}
+
+
+@mcp_server.tool("get_recent_projects")
+@require_initialized
+async def get_recent_projects(limit: int = 10) -> Dict[str, Any]:
+    """
+    Get recently used projects (Claudia API compatibility).
+    
+    Args:
+        limit: Maximum number of projects to return
+        
+    Returns:
+        Dict with list of recent projects
+    """
+    logger.debug(f"Tool called: get_recent_projects(limit={limit})")
+    
+    try:
+        projects = await state.managers['session'].get_recent_projects(limit=limit)
+        
+        result = {
+            "projects": projects,
+            "count": len(projects),
+            "limit": limit,
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Retrieved recent projects", extra={"count": len(projects)})
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting recent projects: {e}", exc_info=True)
+        return {"error": f"Failed to get recent projects: {str(e)}"}
+
+
+@mcp_server.tool("clear_project_sessions")
+@require_initialized
+async def clear_project_sessions(
+    project_path: Optional[str] = None,
+    project_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Clear all sessions for a project.
+    
+    Args:
+        project_path: Project path to clear
+        project_id: Project ID to clear
+        
+    Returns:
+        Dict with number of sessions cleared
+    """
+    logger.debug(f"Tool called: clear_project_sessions(project_path={project_path}, project_id={project_id})")
+    
+    try:
+        cleared_count = await state.managers['session'].clear_project_sessions(
+            project_path=project_path,
+            project_id=project_id
+        )
+        
+        result = {
+            "cleared_count": cleared_count,
+            "project_path": project_path,
+            "project_id": project_id,
+            "cleared_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Cleared project sessions", extra={
+            "project_path": project_path,
+            "project_id": project_id,
+            "cleared_count": cleared_count
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error clearing project sessions: {e}", exc_info=True)
+        return {"error": f"Failed to clear project sessions: {str(e)}"}
 
 
 # Claude Code Session Streaming Resource

@@ -215,6 +215,10 @@ class Session:
     created_at: datetime = field(default_factory=datetime.utcnow)
     error: Optional[str] = None
     
+    # Project-based organization (Claudia compatibility)
+    project_path: Optional[str] = None
+    project_id: Optional[str] = None  # Derived from project_path
+    
     # Queued prompts system (Claudia API compatibility)
     queued_prompts: List[QueuedPrompt] = field(default_factory=list)
     _is_processing: bool = field(default=False, init=False)
@@ -237,6 +241,8 @@ class Session:
         return {
             "id": self.id,
             "binary_path": str(self.binary.path),
+            "project_path": self.project_path,
+            "project_id": self.project_id,
             "model": self.model,
             "state": self.state.value,
             "messages": [
@@ -507,7 +513,8 @@ class SessionManager(BaseManager[Session]):
         prompt: str,
         model: str = "claude-3-sonnet",
         checkpoint_id: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        project_path: Optional[str] = None
     ) -> Session:
         """
         Create a new Claude Code session.
@@ -539,13 +546,21 @@ class SessionManager(BaseManager[Session]):
                 # Generate session ID
                 session_id = f"session_{uuid.uuid4().hex[:12]}"
                 
+                # Derive project_id from project_path (Claudia compatibility)
+                project_id = None
+                if project_path:
+                    # Convert project path to ID by replacing non-alphanumeric chars
+                    project_id = re.sub(r'[^a-zA-Z0-9]', '-', project_path)
+                
                 # Create session
                 session = Session(
                     id=session_id,
                     binary=binary,
                     model=model,
                     checkpoint_id=checkpoint_id,
-                    context=context or {}
+                    context=context or {},
+                    project_path=project_path,
+                    project_id=project_id
                 )
                 
                 # Set resume flag if checkpoint provided
@@ -1699,6 +1714,198 @@ class SessionManager(BaseManager[Session]):
                     "tokens_output": session.metrics.tokens_output
                 }
             )
+    
+    async def get_sessions_by_project(
+        self,
+        project_path: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> List[Session]:
+        """
+        Get all sessions for a project (Claudia compatibility).
+        
+        Args:
+            project_path: Project path to filter by
+            project_id: Project ID to filter by
+            
+        Returns:
+            List of sessions for the project
+        """
+        sessions = []
+        for session in self._sessions.values():
+            if project_path and session.project_path == project_path:
+                sessions.append(session)
+            elif project_id and session.project_id == project_id:
+                sessions.append(session)
+        
+        # Sort by creation time (newest first)
+        sessions.sort(key=lambda s: s.created_at, reverse=True)
+        
+        logger.debug(
+            "sessions_by_project_retrieved",
+            project_path=project_path,
+            project_id=project_id,
+            session_count=len(sessions)
+        )
+        
+        return sessions
+    
+    async def get_project_session_history(
+        self,
+        project_path: Optional[str] = None,
+        project_id: Optional[str] = None,
+        include_messages: bool = True,
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get session history for a project (Claudia compatibility).
+        
+        Args:
+            project_path: Project path to filter by
+            project_id: Project ID to filter by
+            include_messages: Whether to include message history
+            limit: Maximum number of sessions to return
+            
+        Returns:
+            List of session history entries
+        """
+        sessions = await self.get_sessions_by_project(project_path, project_id)
+        
+        # Apply limit if specified
+        if limit:
+            sessions = sessions[:limit]
+        
+        history = []
+        for session in sessions:
+            entry = {
+                "session_id": session.id,
+                "project_path": session.project_path,
+                "project_id": session.project_id,
+                "created_at": session.created_at.isoformat(),
+                "state": session.state.value,
+                "model": session.model,
+                "metrics": {
+                    "duration": session.metrics.duration.total_seconds() if session.metrics.duration else None,
+                    "prompts_sent": session.metrics.prompts_sent,
+                    "tools_executed": session.metrics.tools_executed,
+                    "files_created": session.metrics.files_created,
+                    "files_modified": session.metrics.files_modified,
+                    "tokens_total": session.metrics.tokens_input + session.metrics.tokens_output
+                }
+            }
+            
+            if include_messages:
+                # Apply message filtering
+                messages = [msg.__dict__ for msg in session.messages]
+                filtered_messages = self.filter_manager.filter_messages(
+                    session.id, messages
+                )
+                entry["messages"] = filtered_messages
+                entry["message_count"] = len(session.messages)
+                entry["filtered_message_count"] = len(filtered_messages)
+            
+            history.append(entry)
+        
+        logger.info(
+            "project_session_history_retrieved",
+            project_path=project_path,
+            project_id=project_id,
+            session_count=len(history),
+            include_messages=include_messages
+        )
+        
+        return history
+    
+    async def get_recent_projects(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get recently used projects (Claudia compatibility).
+        
+        Args:
+            limit: Maximum number of projects to return
+            
+        Returns:
+            List of recent projects with metadata
+        """
+        projects = {}
+        
+        # Group sessions by project
+        for session in self._sessions.values():
+            if session.project_path:
+                if session.project_path not in projects:
+                    projects[session.project_path] = {
+                        "project_path": session.project_path,
+                        "project_id": session.project_id,
+                        "last_used": session.created_at,
+                        "session_count": 0,
+                        "total_prompts": 0,
+                        "total_tools": 0
+                    }
+                
+                project = projects[session.project_path]
+                project["session_count"] += 1
+                project["total_prompts"] += session.metrics.prompts_sent
+                project["total_tools"] += session.metrics.tools_executed
+                
+                # Update last used if this session is newer
+                if session.created_at > project["last_used"]:
+                    project["last_used"] = session.created_at
+        
+        # Sort by last used and convert to list
+        recent_projects = sorted(
+            projects.values(),
+            key=lambda p: p["last_used"],
+            reverse=True
+        )[:limit]
+        
+        # Convert datetime to ISO format
+        for project in recent_projects:
+            project["last_used"] = project["last_used"].isoformat()
+        
+        logger.info(
+            "recent_projects_retrieved",
+            project_count=len(recent_projects),
+            limit=limit
+        )
+        
+        return recent_projects
+    
+    async def clear_project_sessions(
+        self,
+        project_path: Optional[str] = None,
+        project_id: Optional[str] = None
+    ) -> int:
+        """
+        Clear all sessions for a project.
+        
+        Args:
+            project_path: Project path to clear
+            project_id: Project ID to clear
+            
+        Returns:
+            Number of sessions cleared
+        """
+        sessions_to_clear = await self.get_sessions_by_project(project_path, project_id)
+        cleared_count = 0
+        
+        for session in sessions_to_clear:
+            try:
+                await self.cancel_session(session.id)
+                del self._sessions[session.id]
+                cleared_count += 1
+            except Exception as e:
+                logger.error(
+                    "failed_to_clear_session",
+                    session_id=session.id,
+                    error=str(e)
+                )
+        
+        logger.info(
+            "project_sessions_cleared",
+            project_path=project_path,
+            project_id=project_id,
+            cleared_count=cleared_count
+        )
+        
+        return cleared_count
 
 
 # Export public API
