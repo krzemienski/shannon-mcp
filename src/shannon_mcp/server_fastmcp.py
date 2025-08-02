@@ -3067,6 +3067,128 @@ async def get_claude_session_history(
 
 
 # ================================
+@mcp_server.tool("check_claude_session_active")
+@require_initialized
+async def check_claude_session_active(session_id: str) -> Dict[str, Any]:
+    """
+    Check if a Claude Code session is still active (Claudia API compatibility).
+    
+    This replaces Claudia's checkForActiveSession functionality, allowing
+    the frontend to determine if a session is still running.
+    
+    Args:
+        session_id: ID of the session to check
+        
+    Returns:
+        Dict with session status information
+    """
+    logger.debug(f"Tool called: check_claude_session_active(session_id={session_id})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        is_active = await state.managers['session'].check_for_active_session(session_id)
+        
+        result = {
+            "session_id": session_id,
+            "is_active": is_active,
+            "checked_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Session activity check completed", extra={"session_id": session_id, "is_active": is_active})
+        return result
+        
+    except ValidationError as e:
+        logger.error(f"Validation error in check_claude_session_active: {e}")
+        return {"error": f"Validation error: {e}"}
+    except Exception as e:
+        logger.error(f"Error checking session activity: {e}", exc_info=True)
+        return {"error": f"Failed to check session activity: {str(e)}"}
+
+
+@mcp_server.tool("reconnect_claude_session")
+@require_initialized
+async def reconnect_claude_session(
+    session_id: str,
+    reconnect_stream: bool = True
+) -> Dict[str, Any]:
+    """
+    Reconnect to an active Claude Code session (Claudia API compatibility).
+    
+    This implements Claudia's reconnectToSession functionality, allowing
+    the frontend to reconnect to sessions that are still running.
+    
+    Args:
+        session_id: ID of the session to reconnect to
+        reconnect_stream: Whether to reconnect to the output stream
+        
+    Returns:
+        Dict with reconnection result and session info
+    """
+    logger.debug(f"Tool called: reconnect_claude_session(session_id={session_id}, reconnect_stream={reconnect_stream})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        # Attempt to resume the session
+        session = await state.managers['session'].resume_session(session_id, reconnect=reconnect_stream)
+        
+        if not session:
+            return {
+                "success": False,
+                "error": f"Session {session_id} not found or no longer active"
+            }
+        
+        result = {
+            "success": True,
+            "session_id": session_id,
+            "session": session.to_dict(),
+            "reconnected_stream": reconnect_stream,
+            "reconnected_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Session reconnection completed", extra={"session_id": session_id, "success": True})
+        return result
+        
+    except ValidationError as e:
+        logger.error(f"Validation error in reconnect_claude_session: {e}")
+        return {"success": False, "error": f"Validation error: {e}"}
+    except Exception as e:
+        logger.error(f"Error reconnecting session: {e}", exc_info=True)
+        return {"success": False, "error": f"Failed to reconnect session: {str(e)}"}
+
+
+@mcp_server.tool("list_running_claude_sessions")
+@require_initialized
+async def list_running_claude_sessions() -> Dict[str, Any]:
+    """
+    List all running Claude Code sessions (Claudia API compatibility).
+    
+    This replaces Claudia's listRunningClaudeSessions Tauri command,
+    providing a list of active sessions with their process information.
+    
+    Returns:
+        Dict with list of running sessions in Claudia format
+    """
+    logger.debug("Tool called: list_running_claude_sessions()")
+    
+    try:
+        running_sessions = await state.managers['session'].list_running_claude_sessions()
+        
+        result = {
+            "sessions": running_sessions,
+            "count": len(running_sessions),
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Listed running sessions", extra={"count": len(running_sessions)})
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error listing running sessions: {e}", exc_info=True)
+        return {"error": f"Failed to list running sessions: {str(e)}"}
+
+
 # Claude Code Session Streaming Resource
 # ================================
 # This resource provides real-time streaming output (replaces Tauri events from Claudia)

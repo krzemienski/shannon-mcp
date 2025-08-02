@@ -896,6 +896,219 @@ class SessionManager(BaseManager[Session]):
         
         return checkpoint_id
     
+    async def resume_session(
+        self,
+        session_id: str,
+        reconnect: bool = True
+    ) -> Optional[Session]:
+        """
+        Resume a Claude Code session (Claudia API compatibility).
+        
+        This method implements session resumption similar to Claudia's checkForActiveSession
+        and reconnectToSession functionality.
+        
+        Args:
+            session_id: Session ID to resume
+            reconnect: Whether to reconnect to active stream
+            
+        Returns:
+            Resumed session or None if not found
+        """
+        # First check if session exists in our registry
+        session = await self.get_session(session_id)
+        if session:
+            logger.info(
+                "session_already_loaded",
+                session_id=session_id,
+                state=session.state.value
+            )
+            return session
+        
+        # Check if session is active in process registry
+        registered_sessions = await self.process_registry.list_sessions()
+        active_session = None
+        
+        for reg_session in registered_sessions:
+            if (reg_session.session_id == session_id and
+                reg_session.client_info.get("type") == "claude_session" and
+                reg_session.status == "active"):
+                active_session = reg_session
+                break
+        
+        if not active_session:
+            logger.warning(
+                "session_not_found_in_registry",
+                session_id=session_id
+            )
+            return None
+        
+        # Try to load session from database
+        session_data = await self._load_session_from_db(session_id)
+        if not session_data:
+            logger.warning(
+                "session_not_found_in_db",
+                session_id=session_id
+            )
+            return None
+        
+        # Reconstruct session object
+        session = await self._reconstruct_session(session_data, active_session)
+        
+        # Add to active sessions
+        self._sessions[session_id] = session
+        
+        if reconnect:
+            # Reconnect to active stream if process is still running
+            await self._reconnect_to_session(session)
+        
+        logger.info(
+            "session_resumed",
+            session_id=session_id,
+            was_active=bool(active_session),
+            reconnected=reconnect
+        )
+        
+        return session
+    
+    async def check_for_active_session(self, session_id: str) -> bool:
+        """
+        Check if a session is still active (Claudia API compatibility).
+        
+        This replaces Claudia's checkForActiveSession functionality.
+        
+        Args:
+            session_id: Session ID to check
+            
+        Returns:
+            True if session is active
+        """
+        # Check our running sessions first
+        if session_id in self._sessions:
+            session = self._sessions[session_id]
+            return session.state == SessionState.RUNNING
+        
+        # Check process registry
+        active_sessions = await self.list_running_claude_sessions()
+        for session_info in active_sessions:
+            if session_info["process_type"]["ClaudeSession"]["session_id"] == session_id:
+                return True
+        
+        return False
+    
+    async def _load_session_from_db(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Load session data from database."""
+        cursor = await self.db.execute(
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,)
+        )
+        row = await cursor.fetchone()
+        
+        if not row:
+            return None
+        
+        # Load messages
+        messages_cursor = await self.db.execute(
+            "SELECT role, content, timestamp, metadata FROM session_messages WHERE session_id = ? ORDER BY timestamp",
+            (session_id,)
+        )
+        message_rows = await messages_cursor.fetchall()
+        
+        return {
+            "session_data": dict(row),
+            "messages": message_rows
+        }
+    
+    async def _reconstruct_session(
+        self,
+        session_data: Dict[str, Any],
+        registered_session: RegisteredSession
+    ) -> Session:
+        """Reconstruct session object from database data."""
+        db_session = session_data["session_data"]
+        
+        # Get binary info
+        binary = await self.binary_manager.discover_binary()
+        
+        # Create session metrics
+        metrics_data = json.loads(db_session.get("metrics", "{}"))
+        metrics = SessionMetrics()
+        
+        # Restore basic timing
+        if db_session.get("started_at"):
+            metrics.start_time = datetime.fromisoformat(db_session["started_at"])
+        if db_session.get("ended_at"):
+            metrics.end_time = datetime.fromisoformat(db_session["ended_at"])
+        
+        # Restore counters from database
+        for field in ["tokens_input", "tokens_output", "messages_sent", 
+                     "messages_received", "errors_count", "checkpoints_created"]:
+            if field in metrics_data:
+                setattr(metrics, field, metrics_data[field])
+        
+        # Mark as resumed
+        metrics.was_resumed = True
+        
+        # Create session
+        session = Session(
+            id=db_session["id"],
+            binary=binary,
+            model=db_session["model"],
+            state=SessionState(db_session["state"]),
+            checkpoint_id=db_session.get("checkpoint_id"),
+            created_at=datetime.fromisoformat(db_session["created_at"]),
+            error=db_session.get("error"),
+            metrics=metrics,
+            context=json.loads(db_session.get("context", "{}"))
+        )
+        
+        # Restore messages
+        for msg_row in session_data["messages"]:
+            message = SessionMessage(
+                role=msg_row[0],
+                content=msg_row[1],
+                timestamp=datetime.fromisoformat(msg_row[2]),
+                metadata=json.loads(msg_row[3] or "{}")
+            )
+            session.messages.append(message)
+        
+        return session
+    
+    async def _reconnect_to_session(self, session: Session) -> None:
+        """Reconnect to an active session's stream."""
+        logger.info(
+            "reconnecting_to_session",
+            session_id=session.id
+        )
+        
+        # Check if the process is still running
+        if session.process and session.process.returncode is None:
+            # Process is still active, reconnect stream
+            session.state = SessionState.RUNNING
+            
+            # Restart stream processing if not already running
+            if not session._stream_task or session._stream_task.done():
+                session._stream_task = asyncio.create_task(
+                    self._stream_processor.process_session(session)
+                )
+            
+            # Update metrics
+            session.metrics.last_activity_time = datetime.utcnow()
+            
+            logger.info(
+                "session_reconnected",
+                session_id=session.id,
+                pid=session.process.pid if session.process else None
+            )
+        else:
+            # Process is no longer running, mark as completed
+            session.state = SessionState.COMPLETED
+            session.metrics.end_time = datetime.utcnow()
+            
+            logger.warning(
+                "session_process_terminated",
+                session_id=session.id
+            )
+    
     async def _save_session(self, session: Session) -> None:
         """Save session to database."""
         await self.db.execute("""
@@ -950,10 +1163,60 @@ class SessionManager(BaseManager[Session]):
         await self._session_cache.cache_session(session, ttl=ttl)
     
     async def _load_active_sessions(self) -> None:
-        """Load active sessions from database."""
-        # For now, we don't persist sessions across restarts
-        # This could be implemented to restore running sessions
-        pass
+        """Load active sessions from database and attempt reconnection."""
+        logger.info("loading_active_sessions")
+        
+        # Load sessions marked as running from database
+        cursor = await self.db.execute(
+            "SELECT id FROM sessions WHERE state IN (?, ?) ORDER BY created_at DESC LIMIT 50",
+            (SessionState.RUNNING.value, SessionState.STARTING.value)
+        )
+        
+        session_ids = [row[0] for row in await cursor.fetchall()]
+        
+        if not session_ids:
+            logger.info("no_active_sessions_found")
+            return
+        
+        # Attempt to resume each session
+        resumed_count = 0
+        for session_id in session_ids:
+            try:
+                # Check if session is actually still active
+                is_active = await self.check_for_active_session(session_id)
+                if is_active:
+                    # Try to resume the session
+                    session = await self.resume_session(session_id, reconnect=True)
+                    if session:
+                        resumed_count += 1
+                        logger.info(
+                            "session_auto_resumed",
+                            session_id=session_id
+                        )
+                else:
+                    # Mark session as completed in database
+                    await self.db.execute(
+                        "UPDATE sessions SET state = ?, ended_at = ? WHERE id = ?",
+                        (SessionState.COMPLETED.value, datetime.utcnow().isoformat(), session_id)
+                    )
+                    logger.info(
+                        "session_marked_completed",
+                        session_id=session_id
+                    )
+            except Exception as e:
+                logger.error(
+                    "failed_to_resume_session",
+                    session_id=session_id,
+                    error=str(e)
+                )
+        
+        if resumed_count > 0:
+            await self.db.commit()
+            logger.info(
+                "active_sessions_loaded",
+                resumed=resumed_count,
+                total_checked=len(session_ids)
+            )
     
     async def _monitor_sessions(self) -> None:
         """Monitor sessions for timeouts and cleanup."""
