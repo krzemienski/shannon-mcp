@@ -3344,6 +3344,189 @@ async def get_queued_prompts(session_id: str) -> Dict[str, Any]:
         return {"error": f"Failed to get queued prompts: {str(e)}"}
 
 
+@mcp_server.tool("get_filtered_messages")
+@require_initialized
+async def get_filtered_messages(
+    session_id: str,
+    profile: Optional[str] = None,
+    filter_types: Optional[List[str]] = None,
+    search_text: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get filtered messages for a Claude Code session (Claudia API compatibility).
+    
+    This implements Claudia's message filtering for virtual scrolling and
+    display optimization. Supports the same filter types as Claudia.
+    
+    Args:
+        session_id: ID of the session
+        profile: Optional filter profile name (claudia_default, minimal, errors_only, conversation)
+        filter_types: Optional list of filter types to apply
+        search_text: Optional text to search for in messages
+        
+    Returns:
+        Dict with filtered messages in Claudia format
+    """
+    logger.debug(f"Tool called: get_filtered_messages(session_id={session_id}, profile={profile})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        # Apply custom filters if provided
+        if filter_types:
+            # Clear existing filters and apply new ones
+            state.managers['session'].filter_manager.clear_session_filters(session_id)
+            
+            for filter_type in filter_types:
+                config = {}
+                if filter_type == "search_text" and search_text:
+                    config = {"search": search_text}
+                
+                await state.managers['session'].set_message_filter(
+                    session_id, filter_type, enabled=True, config=config
+                )
+        
+        # Get filtered messages
+        filtered_messages = await state.managers['session'].get_filtered_messages(
+            session_id, profile=profile
+        )
+        
+        result = {
+            "session_id": session_id,
+            "messages": filtered_messages,
+            "count": len(filtered_messages),
+            "profile": profile or "custom",
+            "filtered_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Retrieved filtered messages", extra={
+            "session_id": session_id,
+            "count": len(filtered_messages),
+            "profile": profile
+        })
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting filtered messages: {e}", exc_info=True)
+        return {"error": f"Failed to get filtered messages: {str(e)}"}
+
+
+@mcp_server.tool("set_message_filter")
+@require_initialized
+async def set_message_filter(
+    session_id: str,
+    filter_type: str,
+    enabled: bool = True,
+    config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Set a specific message filter for a session (Claudia API compatibility).
+    
+    Args:
+        session_id: ID of the session
+        filter_type: Type of filter (exclude_meta, exclude_empty, exclude_tool_results, 
+                    include_types, exclude_types, search_text, tool_specific, 
+                    error_only, user_only, assistant_only)
+        enabled: Whether the filter is enabled
+        config: Filter configuration (e.g., types list, search term, tool names)
+        
+    Returns:
+        Dict with filter setting result
+    """
+    logger.debug(f"Tool called: set_message_filter(session_id={session_id}, filter_type={filter_type})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        await state.managers['session'].set_message_filter(
+            session_id, filter_type, enabled, config
+        )
+        
+        result = {
+            "success": True,
+            "session_id": session_id,
+            "filter_type": filter_type,
+            "enabled": enabled,
+            "config": config,
+            "set_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Message filter set", extra={
+            "session_id": session_id,
+            "filter_type": filter_type,
+            "enabled": enabled
+        })
+        return result
+        
+    except ValidationError as e:
+        logger.error(f"Validation error in set_message_filter: {e}")
+        return {"success": False, "error": f"Validation error: {e}"}
+    except Exception as e:
+        logger.error(f"Error setting message filter: {e}", exc_info=True)
+        return {"success": False, "error": f"Failed to set message filter: {str(e)}"}
+
+
+@mcp_server.tool("clear_message_filters")
+@require_initialized
+async def clear_message_filters(session_id: str) -> Dict[str, Any]:
+    """
+    Clear all message filters for a session (Claudia API compatibility).
+    
+    Args:
+        session_id: ID of the session
+        
+    Returns:
+        Dict with clear result
+    """
+    logger.debug(f"Tool called: clear_message_filters(session_id={session_id})")
+    
+    try:
+        validate_session_id(session_id)
+        
+        await state.managers['session'].clear_message_filters(session_id)
+        
+        result = {
+            "success": True,
+            "session_id": session_id,
+            "cleared_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Message filters cleared", extra={"session_id": session_id})
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error clearing message filters: {e}", exc_info=True)
+        return {"success": False, "error": f"Failed to clear message filters: {str(e)}"}
+
+
+@mcp_server.tool("get_message_filter_profiles")
+@require_initialized
+async def get_message_filter_profiles() -> Dict[str, Any]:
+    """
+    Get available message filter profiles (Claudia API compatibility).
+    
+    Returns:
+        Dict with list of filter profiles
+    """
+    logger.debug("Tool called: get_message_filter_profiles()")
+    
+    try:
+        profiles = await state.managers['session'].get_message_filter_profiles()
+        
+        result = {
+            "profiles": profiles,
+            "count": len(profiles),
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        logger.info(f"Retrieved filter profiles", extra={"count": len(profiles)})
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting filter profiles: {e}", exc_info=True)
+        return {"error": f"Failed to get filter profiles: {str(e)}"}
+
+
 # Claude Code Session Streaming Resource
 # ================================
 # This resource provides real-time streaming output (replaces Tauri events from Claudia)

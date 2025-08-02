@@ -37,6 +37,7 @@ from ..utils.notifications import emit, EventCategory, EventPriority, event_hand
 from ..utils.shutdown import track_request_lifetime, register_shutdown_handler, ShutdownPhase
 from ..utils.logging import get_logger
 from .cache import SessionCache
+from .message_filter import MessageFilterManager, MessageFilter, FilterType, FilterProfile
 
 
 logger = get_logger("shannon-mcp.session")
@@ -369,6 +370,9 @@ class SessionManager(BaseManager[Session]):
         self.binary_manager = binary_manager
         self._sessions: Dict[str, Session] = {}
         self._session_lock = asyncio.Lock()
+        
+        # Initialize message filter manager
+        self.filter_manager = MessageFilterManager()
         
         # Initialize process registry for tracking running sessions
         registry_config = ProcessRegistryConfig(
@@ -929,6 +933,132 @@ class SessionManager(BaseManager[Session]):
             stream_messages.append(stream_message)
         
         return stream_messages
+    
+    async def get_filtered_messages(
+        self,
+        session_id: str,
+        profile: Optional[str] = None,
+        filters: Optional[List[MessageFilter]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get filtered messages for a session (Claudia API compatibility).
+        
+        This method provides Claudia-compatible message filtering for virtual scrolling.
+        
+        Args:
+            session_id: Session ID
+            profile: Optional filter profile name
+            filters: Optional custom filters
+            
+        Returns:
+            Filtered list of messages in stream format
+            
+        Raises:
+            ValidationError: If session not found
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValidationError("session_id", session_id, "Session not found")
+        
+        # Set filters for the session
+        if profile or filters:
+            self.filter_manager.set_session_filters(session_id, filters, profile)
+        
+        # Get all stream messages
+        stream_messages = await self.get_session_live_stream(session_id)
+        
+        # Apply filters
+        filtered_messages = self.filter_manager.filter_messages(session_id, stream_messages)
+        
+        return filtered_messages
+    
+    async def set_message_filter(
+        self,
+        session_id: str,
+        filter_type: str,
+        enabled: bool = True,
+        config: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """
+        Set a specific message filter for a session.
+        
+        Args:
+            session_id: Session ID
+            filter_type: Type of filter (FilterType enum value)
+            enabled: Whether the filter is enabled
+            config: Filter configuration
+            
+        Raises:
+            ValidationError: If session not found or invalid filter type
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValidationError("session_id", session_id, "Session not found")
+        
+        try:
+            filter_type_enum = FilterType(filter_type)
+        except ValueError:
+            raise ValidationError("filter_type", filter_type, "Invalid filter type")
+        
+        # Create and add filter
+        filter_obj = MessageFilter(
+            filter_type=filter_type_enum,
+            enabled=enabled,
+            config=config or {}
+        )
+        
+        self.filter_manager.add_filter(session_id, filter_obj)
+        
+        logger.debug(
+            "message_filter_set",
+            session_id=session_id,
+            filter_type=filter_type,
+            enabled=enabled
+        )
+    
+    async def clear_message_filters(self, session_id: str) -> None:
+        """
+        Clear all message filters for a session.
+        
+        Args:
+            session_id: Session ID
+            
+        Raises:
+            ValidationError: If session not found
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValidationError("session_id", session_id, "Session not found")
+        
+        self.filter_manager.clear_session_filters(session_id)
+        
+        logger.debug("message_filters_cleared", session_id=session_id)
+    
+    async def get_message_filter_profiles(self) -> List[Dict[str, Any]]:
+        """
+        Get available message filter profiles.
+        
+        Returns:
+            List of filter profile definitions
+        """
+        profiles = self.filter_manager.list_profiles()
+        
+        return [
+            {
+                "name": profile.name,
+                "description": profile.description,
+                "is_default": profile.is_default,
+                "filters": [
+                    {
+                        "type": f.filter_type.value,
+                        "enabled": f.enabled,
+                        "config": f.config
+                    }
+                    for f in profile.filters
+                ]
+            }
+            for profile in profiles
+        ]
     
     async def list_running_claude_sessions(self) -> List[Dict[str, Any]]:
         """
