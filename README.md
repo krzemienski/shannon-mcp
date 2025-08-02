@@ -29,6 +29,7 @@ Shannon MCP provides comprehensive programmatic access to Claude Code CLI operat
 - **📊 Analytics Engine**: Comprehensive usage tracking and performance monitoring
 - **🔐 Security Features**: Sandboxed execution with command validation
 - **⚡ Performance**: Sub-10ms response times with efficient streaming
+- **🎨 Frontend Integration**: Pure MCP protocol frontend components extracted from Claudia
 
 ## Architecture
 
@@ -720,6 +721,134 @@ Gets system process information.
   }
 }
 ```
+
+## Frontend Integration
+
+Shannon MCP includes complete frontend components extracted from Claudia, implementing a pure MCP protocol interface with no HTTP, WebSocket, or REST dependencies.
+
+### Components
+
+#### ClaudeCodeSession Component
+
+A React TypeScript component that provides a complete Claude Code session interface:
+
+```typescript
+import { ClaudeCodeSession } from './frontend/ClaudeCodeSession';
+import { ShannonMCPClient } from './frontend/lib/ShannonMCPClient';
+
+// Initialize MCP client
+const mcpClient = new ShannonMCPClient();
+await mcpClient.connect();
+
+// Use the session component
+<ClaudeCodeSession
+  initialProjectPath="/path/to/project"
+  onBack={() => {}}
+  onStreamingChange={(isStreaming, sessionId) => {
+    console.log('Streaming state:', isStreaming, sessionId);
+  }}
+/>
+```
+
+**Features:**
+- Pure MCP protocol communication (no HTTP/WebSocket)
+- Real-time streaming via `shannon://claude-session/{id}/stream` resource
+- Model selection (Sonnet, Opus, Haiku)
+- Project path management
+- Session history loading
+- Start/continue/stop session management
+- Token usage tracking
+
+#### ShannonMCPClient Library
+
+A TypeScript client library for communicating with Shannon MCP server:
+
+```typescript
+import { ShannonMCPClient } from './lib/ShannonMCPClient';
+
+const client = new ShannonMCPClient();
+await client.connect();
+
+// Start a new Claude session
+const session = await client.startClaudeSession(
+  "/path/to/project",
+  "Analyze this codebase and suggest improvements",
+  "sonnet"
+);
+
+// Continue the session
+await client.continueClaudeSession(
+  session.session_id,
+  "Add error handling to the main functions"
+);
+
+// Get real-time stream
+const stream = await client.getClaudeSessionStream(session.session_id);
+```
+
+### MCP Protocol Implementation
+
+The frontend uses pure MCP protocol with these key features:
+
+1. **MCP Tools for Session Management:**
+   - `start_claude_session` - Start new sessions
+   - `continue_claude_session` - Continue existing sessions  
+   - `resume_claude_session` - Resume by session ID
+   - `stop_claude_session` - Stop running sessions
+   - `list_claude_sessions` - List project sessions
+   - `get_claude_session_history` - Retrieve session history
+
+2. **MCP Resources for Real-time Data:**
+   - `shannon://claude-session/{id}/stream` - Live session output
+   - `shannon://sessions` - Session listings
+   - `shannon://projects` - Project information
+
+3. **MCP Protocol Messages:**
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "method": "tools/call",
+     "params": {
+       "name": "start_claude_session",
+       "arguments": {
+         "project_path": "/path/to/project",
+         "prompt": "Your prompt here",
+         "model": "sonnet"
+       }
+     }
+   }
+   ```
+
+### Integration Testing
+
+Run the comprehensive integration test suite:
+
+```bash
+python test_integration_simple.py
+```
+
+**Test Coverage:**
+- ✅ Frontend components structure validation
+- ✅ Pure MCP protocol communication (no HTTP/WebSocket)
+- ✅ Server startup and MCP initialization
+- ✅ Tool calls through MCP protocol
+- ✅ Session streaming resource access
+- ✅ End-to-end MCP-only workflow
+
+### Migration from Tauri/HTTP
+
+The frontend components replace Tauri IPC commands with MCP protocol calls:
+
+| Claudia (Tauri) | Shannon MCP | Description |
+|----------------|-------------|-------------|
+| `execute_claude_code` | `start_claude_session` | Start new session |
+| `continue_claude_code` | `continue_claude_session` | Continue session |
+| `resume_claude_code` | `resume_claude_session` | Resume by ID |
+| `cancel_claude_execution` | `stop_claude_session` | Stop session |
+| `get_project_sessions` | `list_claude_sessions` | List sessions |
+| `load_session_history` | `get_claude_session_history` | Get history |
+| `claude-output` events | `shannon://claude-session/{id}/stream` | Real-time streaming |
 
 ## Resources
 
