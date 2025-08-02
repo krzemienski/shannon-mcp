@@ -1,0 +1,66 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shannon-mcp-ingress
+  namespace: shannon-mcp
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    nginx.ingress.kubernetes.io/rate-limit: "10"
+spec:
+  tls:
+  - hosts:
+    - mcp.example.com
+    secretName: shannon-mcp-tls
+  rules:
+  - host: mcp.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: shannon-mcp-service
+            port:
+              number: 80
+      - path: /events
+        pathType: Prefix
+        backend:
+          service:
+            name: shannon-mcp-service
+            port:
+              number: 80
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: shannon-mcp-service
+            port:
+              number: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shannon-mcp-loadbalancer
+  namespace: shannon-mcp
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: shannon-mcp
+    component: server
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  - name: websocket
+    port: 8081
+    targetPort: 8081

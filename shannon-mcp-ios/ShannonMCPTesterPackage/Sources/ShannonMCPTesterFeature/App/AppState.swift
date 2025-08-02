@@ -27,11 +27,13 @@ public class AppState: ObservableObject {
     @Published var analytics: AnalyticsData = AnalyticsData()
     
     // Error Handling
-    @Published var currentError: MCPError?
-    @Published var showError = false
+    let errorHandler = ErrorHandler()
     
     // Settings
     @Published var settings = AppSettings()
+    
+    // Billing
+    let billingService = BillingService()
     
     enum ConnectionStatus: Equatable {
         case disconnected

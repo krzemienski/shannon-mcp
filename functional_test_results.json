@@ -1,0 +1,17 @@
+{
+  "test_run": "2025-08-01T11:14:08.631265",
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "success_rate": 0.0
+  },
+  "results": [
+    {
+      "test": "Server Startup",
+      "success": false,
+      "timestamp": "2025-08-01T11:14:08.630905",
+      "details": "Failed to start server"
+    }
+  ]
+}

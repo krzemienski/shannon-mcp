@@ -83,8 +83,12 @@ class AgentsViewModel: ObservableObject {
     func activateAgent(_ agent: MCPAgent) {
         Task {
             do {
-                // TODO: Implement activateAgent in MCPService
-                // try await mcpService.activateAgent(agent)
+                // Use manageAgent with 'assign' action to activate the agent
+                _ = try await mcpService.manageAgent(
+                    agentId: agent.id,
+                    action: .assign,
+                    task: ["action": "activate"]
+                )
                 await MainActor.run {
                     if let index = agents.firstIndex(where: { $0.id == agent.id }) {
                         agents[index].status = .available
@@ -102,8 +106,12 @@ class AgentsViewModel: ObservableObject {
     func deactivateAgent(_ agent: MCPAgent) {
         Task {
             do {
-                // TODO: Implement deactivateAgent in MCPService
-                // try await mcpService.deactivateAgent(agent)
+                // Use manageAgent with 'release' action to deactivate the agent
+                _ = try await mcpService.manageAgent(
+                    agentId: agent.id,
+                    action: .release,
+                    task: nil
+                )
                 await MainActor.run {
                     if let index = agents.firstIndex(where: { $0.id == agent.id }) {
                         agents[index].status = .offline
@@ -121,10 +129,25 @@ class AgentsViewModel: ObservableObject {
     func restartAgent(_ agent: MCPAgent) {
         Task {
             do {
-                // TODO: Implement restartAgent in MCPService
-                // try await mcpService.restartAgent(agent)
+                // Release the agent first
+                _ = try await mcpService.manageAgent(
+                    agentId: agent.id,
+                    action: .release,
+                    task: nil
+                )
+                
+                // Then re-assign it to restart
+                _ = try await mcpService.manageAgent(
+                    agentId: agent.id,
+                    action: .assign,
+                    task: ["action": "restart"]
+                )
+                
                 await MainActor.run {
                     resetAgentMetrics(agent.id)
+                    if let index = agents.firstIndex(where: { $0.id == agent.id }) {
+                        agents[index].status = .available
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -155,8 +178,12 @@ class AgentsViewModel: ObservableObject {
     func assignTaskToAgent(_ agent: MCPAgent, task: String) {
         Task {
             do {
-                // TODO: Implement assignTask in MCPService
-                // try await mcpService.assignTask(to: agent, task: task)
+                // Use the existing assignTask method in MCPService
+                _ = try await mcpService.assignTask(
+                    agentId: agent.id,
+                    task: ["description": task],
+                    priority: "normal"
+                )
                 await MainActor.run {
                     updateAgentMetrics(agent.id, taskAssigned: true)
                 }

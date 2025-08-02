@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shannon-mcp-server
+  namespace: shannon-mcp
+  labels:
+    app: shannon-mcp
+    component: server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: shannon-mcp
+      component: server
+  template:
+    metadata:
+      labels:
+        app: shannon-mcp
+        component: server
+    spec:
+      containers:
+      - name: mcp-server
+        image: shannon-mcp:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8081
+          name: websocket
+        - containerPort: 9091
+          name: metrics
+        env:
+        - name: MCP_TRANSPORT
+          value: "sse"
+        - name: MCP_LOG_LEVEL
+          value: "INFO"
+        - name: MCP_CONFIG_PATH
+          value: "/app/config/production.yaml"
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: shannon-mcp-secrets
+              key: api-key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: data
+          mountPath: /app/data
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: config
+        configMap:
+          name: shannon-mcp-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: shannon-mcp-data-pvc
+      - name: logs
+        emptyDir: {}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shannon-mcp-service
+  namespace: shannon-mcp
+  labels:
+    app: shannon-mcp
+    component: server
+spec:
+  selector:
+    app: shannon-mcp
+    component: server
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  - name: websocket
+    port: 8081
+    targetPort: 8081
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shannon-mcp-metrics
+  namespace: shannon-mcp
+  labels:
+    app: shannon-mcp
+    component: metrics
+spec:
+  selector:
+    app: shannon-mcp
+    component: server
+  ports:
+  - name: metrics
+    port: 9091
+    targetPort: 9091
+  type: ClusterIP

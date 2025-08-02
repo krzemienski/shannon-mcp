@@ -9,6 +9,10 @@ struct ShannonMCPTesterApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .errorAlert(handler: appState.errorHandler)
+        }
+        .commands {
+            CommandMenus()
         }
     }
 }

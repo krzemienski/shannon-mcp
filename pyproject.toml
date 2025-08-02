@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp==1.12.1",
     "aiosqlite>=0.19.0",
     "aiofiles>=23.0.0",
     "watchdog>=4.0.0",
@@ -121,3 +121,8 @@ dev-dependencies = [
     "isort>=5.13.0",
     "pre-commit>=3.3.0",
 ]
+
+[tool.uv.sources]
+
+[tool.uv.workspace]
+members = []

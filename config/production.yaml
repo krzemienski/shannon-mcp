@@ -1,0 +1,133 @@
+# Shannon MCP Server Production Configuration
+
+# Server settings
+server:
+  host: 0.0.0.0
+  port: 8080
+  websocket_port: 8081
+  workers: 4
+  max_connections: 1000
+  request_timeout: 30
+  keepalive_timeout: 65
+
+# Transport settings
+transport:
+  default: sse
+  sse:
+    enabled: true
+    heartbeat_interval: 30
+    max_event_size: 1048576  # 1MB
+  websocket:
+    enabled: true
+    ping_interval: 30
+    max_message_size: 10485760  # 10MB
+  http:
+    enabled: false
+    polling_interval: 5
+
+# Session management
+sessions:
+  max_sessions: 100
+  session_timeout: 3600  # 1 hour
+  idle_timeout: 600  # 10 minutes
+  checkpoint_interval: 300  # 5 minutes
+  max_messages_per_session: 10000
+
+# Agent system
+agents:
+  enabled: true
+  max_concurrent_tasks: 50
+  task_timeout: 300
+  agent_categories:
+    - core
+    - infrastructure
+    - quality
+    - specialized
+
+# Storage settings
+storage:
+  type: sqlite
+  path: /app/data/shannon_mcp.db
+  cas_path: /app/data/cas
+  checkpoint_path: /app/data/checkpoints
+  max_storage_size: 10737418240  # 10GB
+  compression:
+    enabled: true
+    algorithm: zstd
+    level: 3
+
+# Analytics settings
+analytics:
+  enabled: true
+  export_path: /app/data/analytics
+  retention_days: 30
+  export_formats:
+    - json
+    - csv
+    - parquet
+  metrics:
+    - sessions
+    - messages
+    - agents
+    - performance
+
+# Logging settings
+logging:
+  level: INFO
+  format: json
+  output:
+    - type: file
+      path: /app/logs/shannon_mcp.log
+      rotation:
+        max_size: 104857600  # 100MB
+        max_files: 10
+    - type: console
+      format: text
+
+# Security settings
+security:
+  api_key_required: true
+  allowed_origins:
+    - http://localhost:*
+    - https://*.shannon-mcp.local
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 60
+    burst: 100
+  tls:
+    enabled: false  # Handled by nginx
+    cert_path: /app/certs/server.crt
+    key_path: /app/certs/server.key
+
+# Performance settings
+performance:
+  stream_buffer_size: 65536  # 64KB
+  message_batch_size: 100
+  max_concurrent_streams: 1000
+  backpressure:
+    enabled: true
+    high_watermark: 1000
+    low_watermark: 500
+
+# Monitoring
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9091
+    path: /metrics
+  health_check:
+    enabled: true
+    path: /health
+    interval: 30
+  ready_check:
+    enabled: true
+    path: /ready
+
+# Claude Code binary settings
+claude_code:
+  search_paths:
+    - /usr/local/bin
+    - /opt/claude
+    - ~/claude-code/bin
+  validate_binary: true
+  min_version: "0.1.0"

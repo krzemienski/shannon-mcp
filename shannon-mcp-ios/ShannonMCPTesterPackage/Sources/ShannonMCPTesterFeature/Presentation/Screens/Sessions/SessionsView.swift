@@ -36,16 +36,20 @@ struct SessionsView: View {
                         systemImage: "bubble.left.and.bubble.right",
                         description: Text("Create a new session to get started")
                     )
+                    .accessibilityLabel("No sessions available. Create a new session to get started.")
                 } else {
                     ForEach(filteredSessions) { session in
                         SessionListRow(session: session)
                             .onTapGesture {
                                 selectedSession = session
                             }
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityHint("Double tap to view session details")
                     }
                     .onDelete(perform: deleteSessions)
                 }
             }
+            .accessibilityIdentifier(AccessibilityIdentifiers.sessionsList)
             .searchable(text: $searchText, prompt: "Search sessions")
             .navigationTitle("Sessions")
             .toolbar(content: {
@@ -68,6 +72,8 @@ struct SessionsView: View {
                     Button(action: { showingNewSession = true }) {
                         Image(systemName: "plus")
                     }
+                    .accessibilityIdentifier(AccessibilityIdentifiers.createSessionButton)
+                    .accessibilityLabel("Create new session")
                 }
             })
             .sheet(isPresented: $showingNewSession) {
@@ -96,6 +102,7 @@ struct SessionListRow: View {
                 Circle()
                     .fill(stateColor)
                     .frame(width: 10, height: 10)
+                    .accessibilityHidden(true)
                 
                 Text(session.state.rawValue.capitalized)
                     .font(.caption)
@@ -115,14 +122,17 @@ struct SessionListRow: View {
             HStack {
                 Label("\(session.messages.count)", systemImage: "message")
                     .font(.caption)
+                    .accessibilityLabel("\(session.messages.count) messages")
                 
                 Label("\(session.metadata.tokenCount)", systemImage: "ticket")
                     .font(.caption)
+                    .accessibilityLabel("\(session.metadata.tokenCount) tokens")
                 
                 if session.checkpoint != nil {
                     Label("Checkpoint", systemImage: "checkmark.circle")
                         .font(.caption)
                         .foregroundColor(.blue)
+                        .accessibilityLabel("Checkpoint saved")
                 }
                 
                 Spacer()
@@ -133,9 +143,13 @@ struct SessionListRow: View {
                     .padding(.vertical, 2)
                     .background(Color.secondary.opacity(0.1))
                     .cornerRadius(4)
+                    .accessibilityLabel("Model: \(session.model)")
             }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(session.prompt), \(AccessibilityLabels.sessionState(session.state)), created \(session.createdAt.formatted(.relative(presentation: .named)))")
+        .accessibilityValue("\(session.messages.count) messages, \(session.metadata.tokenCount) tokens")
     }
     
     private var stateColor: Color {
@@ -163,12 +177,17 @@ struct CreateSessionView: View {
                 Section("Session Details") {
                     TextField("Prompt", text: $prompt, axis: .vertical)
                         .lineLimit(3...6)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.sessionPromptField)
+                        .accessibilityLabel("Session prompt")
+                        .accessibilityHint("Enter the prompt for your session")
                     
                     Picker("Model", selection: $model) {
                         ForEach(models, id: \.self) { model in
                             Text(model).tag(model)
                         }
                     }
+                    .accessibilityLabel("Select model")
+                    .accessibilityHint("Choose the AI model for this session")
                 }
             }
             .navigationTitle("New Session")

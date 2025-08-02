@@ -9,7 +9,6 @@ It spawns the server as a subprocess and communicates via the MCP protocol over 
 import asyncio
 import json
 import logging
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -48,7 +47,7 @@ class MCPTestClient:
     """MCP Test Client for functional testing"""
     
     def __init__(self):
-        self.server_process: Optional[subprocess.Popen] = None
+        self.server_process: Optional[asyncio.subprocess.Process] = None
         self.message_id = 0
         self.reader_task: Optional[asyncio.Task] = None
         self.response_futures: Dict[int, asyncio.Future] = {}
@@ -60,21 +59,27 @@ class MCPTestClient:
         logger.info("Starting Shannon MCP server...")
         
         try:
-            # Start server with stdio transport
-            self.server_process = subprocess.Popen(
-                [PYTHON_CMD, str(SERVER_PATH)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,  # Use binary mode for proper encoding control
-                bufsize=0  # Unbuffered
+            # Start server with asyncio subprocess using uv
+            self.server_process = await asyncio.create_subprocess_exec(
+                "uv", "run", "python", str(SERVER_PATH),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             
             # Start reader task
             self.reader_task = asyncio.create_task(self._read_server_output())
             
-            # Give server time to initialize
-            await asyncio.sleep(2)
+            # Give server time to initialize (server takes ~6-7 seconds)
+            await asyncio.sleep(10)
+            
+            # Check if server is still running
+            if self.server_process.returncode is not None:
+                # Read stderr for error details
+                stderr = await self.server_process.stderr.read()
+                error_msg = stderr.decode('utf-8', errors='replace') if stderr else "Unknown error"
+                logger.error(f"Server failed to start: {error_msg}")
+                raise RuntimeError(f"Server exited with code {self.server_process.returncode}: {error_msg}")
             
             # Send initialize request
             logger.info("Sending initialize request...")
@@ -106,13 +111,15 @@ class MCPTestClient:
         logger.debug("Starting server output reader...")
         
         buffer = b""
-        while not self._stop_reader and self.server_process and self.server_process.poll() is None:
+        while not self._stop_reader and self.server_process and self.server_process.returncode is None:
             try:
-                # Read available data
-                chunk = self.server_process.stdout.read1(4096)
+                # Read available data using asyncio
+                chunk = await self.server_process.stdout.read(4096)
+                
                 if not chunk:
-                    await asyncio.sleep(0.01)
-                    continue
+                    # End of stream or process terminated
+                    logger.debug("End of stream detected")
+                    break
                 
                 buffer += chunk
                 
@@ -146,6 +153,8 @@ class MCPTestClient:
             except Exception as e:
                 logger.error(f"Reader error: {e}")
                 await asyncio.sleep(0.1)
+        
+        logger.debug("Server output reader stopped")
     
     async def send_request(self, method: str, params: Optional[Dict[str, Any]] = None, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
         """Send a request to the server and wait for response"""
@@ -164,8 +173,18 @@ class MCPTestClient:
         # Send message
         logger.debug(f"Sending: {json.dumps(message, indent=2)}")
         message_bytes = (json.dumps(message) + "\n").encode('utf-8')
-        self.server_process.stdin.write(message_bytes)
-        self.server_process.stdin.flush()
+        
+        # Check if process is still running
+        if self.server_process.returncode is not None:
+            logger.error(f"Server process terminated with code: {self.server_process.returncode}")
+            raise RuntimeError("Server process terminated")
+        
+        try:
+            self.server_process.stdin.write(message_bytes)
+            await self.server_process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as e:
+            logger.error(f"Failed to send message: {e}")
+            raise RuntimeError("Connection lost") from e
         
         # Wait for response
         try:
@@ -212,22 +231,31 @@ class MCPTestClient:
         # Stop reader
         self._stop_reader = True
         if self.reader_task:
-            await self.reader_task
+            self.reader_task.cancel()
+            try:
+                await self.reader_task
+            except asyncio.CancelledError:
+                pass
         
         # Terminate server
-        if self.server_process:
-            self.server_process.terminate()
+        if self.server_process and self.server_process.returncode is None:
             try:
-                self.server_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                self.server_process.terminate()
+                await asyncio.wait_for(self.server_process.wait(), timeout=5)
+            except asyncio.TimeoutError:
                 self.server_process.kill()
-                self.server_process.wait()
+                await self.server_process.wait()
+            except ProcessLookupError:
+                # Process already terminated
+                pass
             
             # Log any stderr output
-            if self.server_process.stderr:
-                stderr = self.server_process.stderr.read()
+            try:
+                stderr = await self.server_process.stderr.read()
                 if stderr:
                     logger.debug(f"Server stderr: {stderr.decode('utf-8', errors='replace')}")
+            except Exception:
+                pass
 
 
 async def run_functional_tests():

@@ -66,6 +66,8 @@ struct AnalyticsData {
     var errorCount: Int = 0
     var toolExecutions: [String: Int] = [:]
     var lastUpdated: Date = Date()
+    var startTime: Date = Date()
+    var bytesTransferred: Int64 = 0
     
     var sessionStats: SessionStats {
         SessionStats(

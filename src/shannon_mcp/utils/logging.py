@@ -29,15 +29,11 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 install_rich_traceback()
 
 # Console for rich output
-# Check if running as MCP server (stdio mode)
+# Check if running as MCP server (stdio mode) - will be rechecked in setup_logging
 import os
-mcp_mode = os.environ.get('SHANNON_MCP_MODE') == 'stdio'
 
-# Configure console to use stderr for MCP mode
-console = Console(
-    file=sys.stderr if mcp_mode else sys.stdout,
-    force_terminal=not mcp_mode  # Disable terminal formatting in MCP mode
-)
+# Default console - will be reconfigured in setup_logging based on MCP mode
+console = Console(file=sys.stdout, force_terminal=True)
 
 
 class JSONFormatter(logging.Formatter):
@@ -134,6 +130,16 @@ def setup_logging(
     Returns:
         Dictionary with logger instances and configuration
     """
+    # Detect MCP mode - must be done in function since env var set after import
+    mcp_mode = os.environ.get('SHANNON_MCP_MODE') == 'stdio'
+    
+    # Reconfigure console for MCP mode
+    global console
+    if mcp_mode:
+        # In MCP mode, create a null console to suppress all Rich output
+        import io
+        console = Console(file=io.StringIO(), force_terminal=False)
+    
     # Create log directory
     if log_dir is None:
         log_dir = Path.home() / ".shannon-mcp" / "logs"
@@ -187,12 +193,10 @@ def setup_logging(
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
     else:
-        # In MCP mode, only add a stderr handler
-        stderr_handler = logging.StreamHandler(sys.stderr)
-        stderr_handler.setLevel(logging.WARNING)  # Only warnings and errors to stderr
-        stderr_formatter = logging.Formatter('[%(levelname)s] %(message)s')
-        stderr_handler.setFormatter(stderr_formatter)
-        root_logger.addHandler(stderr_handler)
+        # In MCP mode, send logs to a null handler to suppress all console output
+        # This is critical - MCP requires clean JSON-RPC on stdout/stderr
+        null_handler = logging.NullHandler()
+        root_logger.addHandler(null_handler)
     
     # File handler with rotation
     file_handler = logging.handlers.RotatingFileHandler(

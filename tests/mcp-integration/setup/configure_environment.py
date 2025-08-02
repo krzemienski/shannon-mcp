@@ -109,8 +109,16 @@ def test_function():
     return "MCP Integration Test"
 """)
         
-        (python_project / "requirements.txt").write_text("""pytest>=7.0.0
-asyncio
+        (python_project / "pyproject.toml").write_text("""[project]
+name = "python-test-project"
+version = "1.0.0"
+dependencies = [
+    "pytest>=7.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 """)
         
         (python_project / ".shannon-mcp").mkdir(exist_ok=True)
@@ -124,7 +132,7 @@ description: Test Python project for MCP integration
             "name": "python-test-project",
             "path": str(python_project),
             "type": "python",
-            "files": ["main.py", "requirements.txt", ".shannon-mcp/project.yaml"]
+            "files": ["main.py", "pyproject.toml", ".shannon-mcp/project.yaml"]
         })
         
         # Project 2: Node.js project

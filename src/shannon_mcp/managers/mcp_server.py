@@ -166,7 +166,7 @@ class MCPServerManager(BaseManager[MCPServer]):
         manager_config = ManagerConfig(
             name="mcp_server_manager",
             db_path=Path.home() / ".shannon-mcp" / "mcp_servers.db",
-            custom_config=config.dict()
+            custom_config=config.model_dump()
         )
         super().__init__(manager_config)
         

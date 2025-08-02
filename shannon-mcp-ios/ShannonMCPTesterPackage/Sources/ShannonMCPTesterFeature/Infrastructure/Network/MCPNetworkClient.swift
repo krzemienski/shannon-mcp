@@ -82,15 +82,111 @@ struct MCPRequest<T: Encodable>: Encodable, Sendable where T: Sendable {
     }
 }
 
-/// MCP protocol methods
-enum MCPMethod: String {
+/// MCP protocol methods - Complete Shannon MCP Server Implementation (30 Tools)
+enum MCPMethod: String, CaseIterable, Sendable {
+    // Binary Management Tools (2)
     case findClaudeBinary = "find_claude_binary"
+    case checkClaudeUpdates = "check_claude_updates"
+    
+    // Server Management Tools (2)
+    case serverStatus = "server_status"
+    case manageSettings = "manage_settings"
+    
+    // Project Management Tools (8)
+    case createProject = "create_project"
+    case listProjects = "list_projects"
+    case getProject = "get_project" 
+    case updateProject = "update_project"
+    case archiveProject = "archive_project"
+    case getProjectSessions = "get_project_sessions"
+    case cloneProject = "clone_project"
+    case createProjectCheckpoint = "create_project_checkpoint"
+    
+    // Session Management Tools (5)
     case createSession = "create_session"
     case sendMessage = "send_message"
-    case manageAgent = "manage_agent"
-    case setCheckpoint = "set_checkpoint"
-    case revertCheckpoint = "revert_checkpoint"
-    case getSessionInfo = "get_session_info"
+    case cancelSession = "cancel_session"
+    case listSessions = "list_sessions"
+    case setProjectActiveSession = "set_project_active_session"
+    
+    // Agent Management Tools (4)
+    case listAgents = "list_agents"
+    case createAgent = "create_agent"
+    case executeAgent = "execute_agent"
+    case assignTask = "assign_task"
+    
+    // Checkpoint Management Tools (4)
+    case createCheckpoint = "create_checkpoint"
+    case restoreCheckpoint = "restore_checkpoint"
+    case listCheckpoints = "list_checkpoints"
+    case branchCheckpoint = "branch_checkpoint"
+    
+    // Analytics Tools (1)
+    case queryAnalytics = "query_analytics"
+    
+    // MCP Server Tools (4)
+    case mcpAdd = "mcp_add"
+    case mcpAddFromClaudeDesktop = "mcp_add_from_claude_desktop"
+    case mcpAddJson = "mcp_add_json"
+    case mcpServe = "mcp_serve"
+    
+    /// User-friendly display name for the tool
+    var displayName: String {
+        switch self {
+        case .findClaudeBinary: return "Find Claude Binary"
+        case .checkClaudeUpdates: return "Check Claude Updates"
+        case .serverStatus: return "Server Status"
+        case .manageSettings: return "Manage Settings"
+        case .createProject: return "Create Project"
+        case .listProjects: return "List Projects"
+        case .getProject: return "Get Project"
+        case .updateProject: return "Update Project"
+        case .archiveProject: return "Archive Project"
+        case .getProjectSessions: return "Get Project Sessions"
+        case .cloneProject: return "Clone Project"
+        case .createProjectCheckpoint: return "Create Project Checkpoint"
+        case .createSession: return "Create Session"
+        case .sendMessage: return "Send Message"
+        case .cancelSession: return "Cancel Session"
+        case .listSessions: return "List Sessions"
+        case .setProjectActiveSession: return "Set Project Active Session"
+        case .listAgents: return "List Agents"
+        case .createAgent: return "Create Agent"
+        case .executeAgent: return "Execute Agent"
+        case .assignTask: return "Assign Task"
+        case .createCheckpoint: return "Create Checkpoint"
+        case .restoreCheckpoint: return "Restore Checkpoint"
+        case .listCheckpoints: return "List Checkpoints"
+        case .branchCheckpoint: return "Branch Checkpoint"
+        case .queryAnalytics: return "Query Analytics"
+        case .mcpAdd: return "Add MCP Server"
+        case .mcpAddFromClaudeDesktop: return "Import from Claude Desktop"
+        case .mcpAddJson: return "Add MCP Server from JSON"
+        case .mcpServe: return "Serve MCP Server"
+        }
+    }
+    
+    /// Tool category for organization
+    var category: String {
+        switch self {
+        case .findClaudeBinary, .checkClaudeUpdates:
+            return "Binary Management"
+        case .serverStatus, .manageSettings:
+            return "Server Management"
+        case .createProject, .listProjects, .getProject, .updateProject, .archiveProject, .getProjectSessions, .cloneProject, .createProjectCheckpoint:
+            return "Project Management"
+        case .createSession, .sendMessage, .cancelSession, .listSessions, .setProjectActiveSession:
+            return "Session Management"
+        case .listAgents, .createAgent, .executeAgent, .assignTask:
+            return "Agent Management"
+        case .createCheckpoint, .restoreCheckpoint, .listCheckpoints, .branchCheckpoint:
+            return "Checkpoint Management"
+        case .queryAnalytics:
+            return "Analytics"
+        case .mcpAdd, .mcpAddFromClaudeDesktop, .mcpAddJson, .mcpServe:
+            return "MCP Server Management"
+        }
+    }
 }
 
 /// Custom error types for MCP network operations

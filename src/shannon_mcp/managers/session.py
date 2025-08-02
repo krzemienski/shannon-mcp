@@ -172,7 +172,7 @@ class SessionManager(BaseManager[Session]):
         manager_config = ManagerConfig(
             name="session_manager",
             db_path=Path.home() / ".shannon-mcp" / "sessions.db",
-            custom_config=config.dict()
+            custom_config=config.model_dump()
         )
         super().__init__(manager_config)
         

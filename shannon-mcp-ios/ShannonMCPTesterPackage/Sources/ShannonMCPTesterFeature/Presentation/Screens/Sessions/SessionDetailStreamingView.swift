@@ -126,8 +126,12 @@ struct SessionDetailStreamingView: View {
                     content: content
                 )
             } catch {
-                self.error = error
                 isStreaming = false
+                streamingContent = ""
+                
+                let mcpError = error as? MCPError ?? MCPError.messageFailure(reason: error.localizedDescription)
+                appState.errorHandler.handle(mcpError, context: "Sending message")
+                self.error = mcpError
             }
         }
     }
@@ -136,8 +140,11 @@ struct SessionDetailStreamingView: View {
         Task {
             do {
                 try await mcpService.cancelSession(session.id)
+                dismiss() // Dismiss the view after cancelling
             } catch {
-                self.error = error
+                let mcpError = error as? MCPError ?? MCPError.sessionCreationFailed(reason: error.localizedDescription)
+                appState.errorHandler.handle(mcpError, context: "Cancelling session")
+                self.error = mcpError
             }
         }
     }
@@ -149,8 +156,12 @@ struct SessionDetailStreamingView: View {
                     sessionId: session.id,
                     description: "Manual checkpoint"
                 )
+                // Show success feedback
+                await AccessibilityAnnouncer.shared.announce("Checkpoint created successfully")
             } catch {
-                self.error = error
+                let mcpError = error as? MCPError ?? MCPError.messageFailure(reason: error.localizedDescription)
+                appState.errorHandler.handle(mcpError, context: "Creating checkpoint")
+                self.error = mcpError
             }
         }
     }
@@ -203,6 +214,7 @@ struct MessageBubble: View {
                     HStack(spacing: 4) {
                         Image(systemName: iconForRole(message.role))
                             .font(.caption2)
+                            .accessibilityHidden(true)
                         Text(message.role.rawValue.capitalized)
                             .font(.caption2)
                     }
@@ -224,6 +236,9 @@ struct MessageBubble: View {
                 Spacer()
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(message.role.rawValue.capitalized) at \(message.timestamp.formatted(date: .omitted, time: .shortened))")
+        .accessibilityValue(message.content)
     }
     
     private func iconForRole(_ role: MCPMessage.MessageRole) -> String {
@@ -317,6 +332,9 @@ struct MessageInputView: View {
                         onSend()
                     }
                 }
+                .accessibilityIdentifier(AccessibilityIdentifiers.sendMessageField)
+                .accessibilityLabel("Message input")
+                .accessibilityHint(isStreaming ? "Streaming in progress" : "Type your message here")
             
             Button(action: onSend) {
                 Image(systemName: "arrow.up.circle.fill")
@@ -324,8 +342,12 @@ struct MessageInputView: View {
                     .foregroundColor(text.isEmpty || isStreaming ? .gray : .blue)
             }
             .disabled(text.isEmpty || isStreaming)
+            .accessibilityIdentifier(AccessibilityIdentifiers.sendMessageButton)
+            .accessibilityLabel("Send message")
+            .accessibilityHint(text.isEmpty ? "Enter a message first" : isStreaming ? "Wait for streaming to complete" : "Double tap to send message")
         }
         .padding()
+        .keyboardToolbarEnabled()
     }
 }
 

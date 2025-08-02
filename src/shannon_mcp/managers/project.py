@@ -114,14 +114,14 @@ class Project:
         }
 
 
+@dataclass
 class ProjectManagerConfig(ManagerConfig):
     """Configuration for Project Manager."""
-    name: str = "project_manager"
+    storage_path: Path = field(default_factory=lambda: Path.home() / ".shannon-mcp" / "projects")
     max_projects_per_user: int = 100
     max_sessions_per_project: int = 50
     auto_archive_days: int = 30
     enable_project_templates: bool = True
-    storage_path: Path = Path.home() / ".shannon-mcp" / "projects"
 
 
 class ProjectManager:

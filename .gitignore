@@ -69,6 +69,8 @@ dmypy.json
 
 # Local development
 *.log
+shannon_test*.log
+functional_test*.log
 *.pid
 *.seed
 *.pid.lock

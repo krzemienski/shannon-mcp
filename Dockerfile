@@ -15,14 +15,21 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for fast dependency management
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy dependency files first for better caching
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies
-RUN uv pip install --system --no-cache -r pyproject.toml
+# Create virtual environment and install dependencies
+RUN uv venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies using uv with frozen lockfile
+RUN uv sync --frozen --no-dev
+
+# Copy source code
+COPY src/ ./src/
 
 # Runtime stage - minimal image for production
 FROM python:3.11-slim
@@ -35,12 +42,15 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+
+# Set up virtual environment
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
-COPY src/ ./src/
+COPY --from=builder /build/src/ ./src/
 COPY config/ ./config/
 
 # Create directories for data and logs
@@ -66,4 +76,4 @@ ENV PYTHONUNBUFFERED=1 \
     MCP_LOG_PATH=/app/logs
 
 # Run the MCP server
-CMD ["python", "-m", "shannon_mcp.server_fastmcp"]
+CMD ["shannon-mcp"]

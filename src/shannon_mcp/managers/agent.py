@@ -76,7 +76,7 @@ class AgentManager(BaseManager[Agent]):
         manager_config = ManagerConfig(
             name="agent_manager",
             db_path=Path.home() / ".shannon-mcp" / "agents.db",
-            custom_config=config.dict()
+            custom_config=config.model_dump()
         )
         super().__init__(manager_config)
         

@@ -6,6 +6,12 @@ This wrapper ensures stdio mode is set before any imports.
 """
 import os
 import sys
+from pathlib import Path
+
+# Add src directory to path for proper imports
+src_dir = Path(__file__).parent.parent
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 
 def main():

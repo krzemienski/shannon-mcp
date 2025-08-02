@@ -13,8 +13,9 @@ for managing Claude Code CLI operations with advanced features including:
 __version__ = "0.1.0"
 __author__ = "Shannon MCP Team"
 
-from .server_fastmcp import main
+# Import removed to prevent circular import issues
+# from .server_fastmcp import main
 
 __all__ = [
-    'main',
+    # 'main',
 ]

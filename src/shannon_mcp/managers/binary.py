@@ -108,7 +108,7 @@ class BinaryManager(BaseManager[BinaryInfo]):
         manager_config = ManagerConfig(
             name="binary_manager",
             db_path=Path.home() / ".shannon-mcp" / "binary.db",
-            custom_config=config.dict()
+            custom_config=config.model_dump()
         )
         super().__init__(manager_config)
         

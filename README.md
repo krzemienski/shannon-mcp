@@ -103,27 +103,72 @@ Shannon MCP provides comprehensive programmatic access to Claude Code CLI operat
 
 - Python 3.11 or higher
 - Claude Code CLI (install from [claude.ai/code](https://claude.ai/code))
-- uv (recommended) or pip for dependency management
+- uv (recommended) - Fast Python package manager
 
-### Installation Steps
+### Quick Setup (Recommended)
 
 ```bash
-# Install uv if you haven't already
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# Or use pip: pip install uv
-
 # Clone the repository
 git clone https://github.com/yourusername/shannon-mcp.git
 cd shannon-mcp
 
-# Install with uv (recommended)
-uv sync
+# Run the automated setup script
+./setup-uv.sh
 
-# Or install with pip
-pip install -e .
+# Activate the environment (optional - you can also use 'uv run')
+source .venv/bin/activate
+```
+
+### Manual Installation with UV
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and setup
+git clone https://github.com/yourusername/shannon-mcp.git
+cd shannon-mcp
+
+# Create virtual environment and install dependencies
+uv sync --dev
 
 # Verify installation
 uv run shannon-mcp --version
+```
+
+### Alternative: Installation with pip
+
+```bash
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -e .
+
+# Verify installation
+shannon-mcp --version
+```
+
+### Development Setup
+
+Use the provided `dev.sh` script for common development tasks:
+
+```bash
+# Show all available commands
+./dev.sh help
+
+# Run tests
+./dev.sh test
+
+# Format code
+./dev.sh format
+
+# Run all checks
+./dev.sh check
+
+# Start the server
+./dev.sh dev
 ```
 
 ### Claude Desktop Integration

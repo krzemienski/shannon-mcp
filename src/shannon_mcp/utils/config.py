@@ -294,7 +294,7 @@ class ConfigLoader:
                 await emit(
                     "config_loaded",
                     EventCategory.SYSTEM,
-                    {"config": self._config.dict()},
+                    {"config": self._config.model_dump()},
                     priority=EventPriority.HIGH
                 )
                 
@@ -471,8 +471,8 @@ class ConfigLoader:
                     "config_changed",
                     EventCategory.SYSTEM,
                     {
-                        "old_config": old_config.dict() if old_config else None,
-                        "new_config": new_config.dict()
+                        "old_config": old_config.model_dump() if old_config else None,
+                        "new_config": new_config.model_dump()
                     },
                     priority=EventPriority.HIGH
                 )

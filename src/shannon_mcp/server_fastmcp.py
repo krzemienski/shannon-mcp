@@ -15,22 +15,20 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Union, Callable, AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from enum import Enum
-import traceback
 import uuid
 
 from fastmcp import FastMCP
-from mcp.types import TextContent, ImageContent, EmbeddedResource
+from mcp.types import TextContent
 
-from .managers.binary import BinaryManager, BinaryInfo
-from .managers.session import SessionManager, SessionState, Session
-from .managers.agent import AgentManager, TaskRequest, Agent, TaskAssignment
+from .managers.binary import BinaryManager
+from .managers.session import SessionManager, SessionState
+from .managers.agent import AgentManager, TaskRequest
 from .managers.mcp_server import MCPServerManager
 from .managers.checkpoint import CheckpointManager
 from .managers.hook import HookManager
 from .managers.analytics import AnalyticsManager
 from .managers.process_registry import ProcessRegistryManager
-from .managers.project import ProjectManager, ProjectManagerConfig, Project, ProjectStatus
+from .managers.project import ProjectManager, ProjectManagerConfig
 from .utils.config import load_config, get_config, ShannonConfig
 from .utils.logging import setup_logging, get_logger
 from .utils.notifications import setup_notifications, notify_event
@@ -38,10 +36,8 @@ from .utils.errors import (
     ShannonMCPError, 
     SessionNotFoundError,
     AgentNotFoundError,
-    BinaryNotFoundError,
     InvalidRequestError,
-    RateLimitError,
-    AuthenticationError
+    ValidationError
 )
 from .utils.validators import validate_prompt, validate_model, validate_session_id
 from .utils.metrics import MetricsCollector, track_operation
@@ -431,14 +427,25 @@ class ServerState:
 state = ServerState()
 
 
+def ensure_state_initialized():
+    """Ensure the server state is properly initialized."""
+    if not state.initialized:
+        raise RuntimeError("Server state not initialized. The server must be started first.")
+
+
 # Lifespan management for proper initialization/cleanup
 @asynccontextmanager
 async def lifespan(app):
-    """Manage server lifecycle with comprehensive error handling."""
-    # Initialize the server before yielding
+    """Incremental lifespan for testing - adding config loading."""
     try:
-        await state.initialize()
-        logger.info("Shannon MCP Server initialized in lifespan")
+        # Test config loading first
+        logger.info("Loading configuration...")
+        from shannon_mcp.utils.config import load_config
+        state.config = await load_config()
+        logger.info("Configuration loaded successfully")
+        
+        state.initialized = True
+        logger.info("Shannon MCP Server initialized in lifespan (with config)")
     except Exception as e:
         logger.error(f"Failed to initialize server: {e}", exc_info=True)
         raise
@@ -446,11 +453,11 @@ async def lifespan(app):
     try:
         yield
     finally:
-        await state.cleanup()
+        state.initialized = False
 
 
-# Create FastMCP instance with full configuration
-mcp = FastMCP(
+# Create FastMCP instance - server won't start until run() is called
+mcp_server = FastMCP(
     name="Shannon MCP Server",
     version="0.1.0",
     instructions="""Claude Code CLI integration via MCP.
@@ -538,7 +545,7 @@ def require_auth(scope: str):
 
 # ===== TOOLS - Production implementation with full features =====
 
-@mcp.tool()
+@mcp_server.tool()
 async def find_claude_binary() -> Dict[str, Any]:
     """
     Discover Claude Code installation on the system.
@@ -604,7 +611,7 @@ async def find_claude_binary() -> Dict[str, Any]:
         raise ShannonMCPError(f"Failed to discover binary: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def check_claude_updates(
     current_version: Optional[str] = None,
     channel: str = "stable"
@@ -711,7 +718,7 @@ async def check_claude_updates(
         raise ShannonMCPError(f"Failed to check for updates: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def server_status() -> Dict[str, Any]:
     """
     Get the current server status including initialization state and manager health.
@@ -767,7 +774,7 @@ async def server_status() -> Dict[str, Any]:
         }
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def create_project(
     name: str,
     description: Optional[str] = None,
@@ -823,7 +830,7 @@ async def create_project(
         raise ShannonMCPError(f"Failed to create project: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def list_projects(
     status: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -889,7 +896,7 @@ async def list_projects(
         raise ShannonMCPError(f"Failed to list projects: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def get_project(
     project_id: str,
     include_sessions: bool = True
@@ -942,7 +949,7 @@ async def get_project(
         raise ShannonMCPError(f"Failed to get project: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def update_project(
     project_id: str,
     name: Optional[str] = None,
@@ -998,7 +1005,7 @@ async def update_project(
         raise ShannonMCPError(f"Failed to update project: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def create_session(
     prompt: str,
     model: str = "claude-3-sonnet",
@@ -1092,7 +1099,7 @@ async def create_session(
         raise ShannonMCPError(f"Failed to create session: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def send_message(
     session_id: str,
     message: str,
@@ -1202,7 +1209,7 @@ async def send_message(
         raise ShannonMCPError(f"Failed to send message: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def cancel_session(
     session_id: str,
     reason: Optional[str] = None,
@@ -1264,7 +1271,7 @@ async def cancel_session(
         raise ShannonMCPError(f"Failed to cancel session: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def list_sessions(
     status: Optional[str] = None,
     limit: int = 10,
@@ -1336,7 +1343,7 @@ async def list_sessions(
         raise ShannonMCPError(f"Failed to list sessions: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def list_agents(
     category: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
@@ -1403,7 +1410,7 @@ async def list_agents(
         raise ShannonMCPError(f"Failed to list agents: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def create_agent(
     name: str,
     role: str,
@@ -1508,7 +1515,7 @@ async def create_agent(
         raise ShannonMCPError(f"Failed to create agent: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def execute_agent(
     agent_id: str,
     task: str,
@@ -1597,7 +1604,7 @@ async def execute_agent(
         raise ShannonMCPError(f"Failed to execute agent task: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def assign_task(
     agent_id: str,
     task: str,
@@ -1693,7 +1700,7 @@ async def assign_task(
         raise ShannonMCPError(f"Failed to assign task: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def create_checkpoint(
     session_id: str,
     name: Optional[str] = None,
@@ -1738,7 +1745,7 @@ async def create_checkpoint(
         raise ShannonMCPError(f"Failed to create checkpoint: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def restore_checkpoint(
     checkpoint_id: str,
     options: Optional[Dict[str, Any]] = None
@@ -1773,7 +1780,7 @@ async def restore_checkpoint(
         raise ShannonMCPError(f"Failed to restore checkpoint: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def list_checkpoints(
     session_id: Optional[str] = None,
     tags: Optional[List[str]] = None,
@@ -1829,7 +1836,7 @@ async def list_checkpoints(
         raise ShannonMCPError(f"Failed to list checkpoints: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def branch_checkpoint(
     checkpoint_id: str,
     branch_name: str,
@@ -1879,7 +1886,7 @@ async def branch_checkpoint(
         raise ShannonMCPError(f"Failed to branch checkpoint: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def query_analytics(
     query_type: str,
     parameters: Dict[str, Any],
@@ -1925,7 +1932,7 @@ async def query_analytics(
         raise ShannonMCPError(f"Failed to query analytics: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def manage_settings(
     action: str,
     key: Optional[str] = None,
@@ -2039,7 +2046,7 @@ async def manage_settings(
         raise ShannonMCPError(f"Failed to manage settings: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def mcp_add(
     name: str,
     command: str,
@@ -2128,7 +2135,7 @@ async def mcp_add(
         raise ShannonMCPError(f"Failed to add MCP server: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def mcp_add_from_claude_desktop(
     name: str,
     desktop_config_path: Optional[str] = None
@@ -2194,7 +2201,7 @@ async def mcp_add_from_claude_desktop(
         raise ShannonMCPError(f"Failed to import from Claude Desktop: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def mcp_add_json(
     config: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -2295,7 +2302,7 @@ async def mcp_add_json(
         raise ShannonMCPError(f"Failed to add MCP server from JSON: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def archive_project(
     project_id: str
 ) -> Dict[str, Any]:
@@ -2331,7 +2338,7 @@ async def archive_project(
         raise ShannonMCPError(f"Failed to archive project: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def get_project_sessions(
     project_id: str,
     include_archived: bool = False
@@ -2391,7 +2398,7 @@ async def get_project_sessions(
         raise ShannonMCPError(f"Failed to get project sessions: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def clone_project(
     project_id: str,
     new_name: str,
@@ -2436,7 +2443,7 @@ async def clone_project(
         raise ShannonMCPError(f"Failed to clone project: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def create_project_checkpoint(
     project_id: str,
     name: Optional[str] = None,
@@ -2498,7 +2505,7 @@ async def create_project_checkpoint(
         raise ShannonMCPError(f"Failed to create project checkpoint: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def set_project_active_session(
     project_id: str,
     session_id: str
@@ -2552,7 +2559,7 @@ async def set_project_active_session(
         raise ShannonMCPError(f"Failed to set active session: {str(e)}")
 
 
-@mcp.tool()
+@mcp_server.tool()
 async def mcp_serve(
     name: str,
     port: Optional[int] = None,
@@ -2629,7 +2636,7 @@ async def mcp_serve(
 
 # ===== RESOURCES - Production implementation with full features =====
 
-@mcp.resource("shannon://config")
+@mcp_server.resource("shannon://config")
 @require_initialized
 async def get_config() -> str:
     """Complete Shannon MCP server configuration."""
@@ -2637,7 +2644,7 @@ async def get_config() -> str:
     
     # Add runtime information
     config_dict['runtime'] = {
-        'version': mcp.version,
+        'version': mcp_server.version,
         'uptime': (datetime.now(timezone.utc) - state._startup_time).total_seconds(),
         'initialized': state.initialized,
         'managers': list(state.managers.keys()),
@@ -2648,7 +2655,7 @@ async def get_config() -> str:
     return json.dumps(config_dict, indent=2)
 
 
-@mcp.resource("shannon://agents")
+@mcp_server.resource("shannon://agents")
 @require_initialized
 async def get_agents() -> str:
     """Complete list of available AI agents with real-time status."""
@@ -2664,7 +2671,7 @@ async def get_agents() -> str:
     return json.dumps({"agents": agent_list}, indent=2)
 
 
-@mcp.resource("shannon://projects")
+@mcp_server.resource("shannon://projects")
 @require_initialized
 async def get_projects() -> str:
     """List all projects with their current state."""
@@ -2676,7 +2683,7 @@ async def get_projects() -> str:
     }, indent=2)
 
 
-@mcp.resource("shannon://projects/{project_id}")
+@mcp_server.resource("shannon://projects/{project_id}")
 @require_initialized
 async def get_project_resource(project_id: str) -> str:
     """Detailed information about a specific project including sessions."""
@@ -2698,7 +2705,7 @@ async def get_project_resource(project_id: str) -> str:
     return json.dumps(details, indent=2)
 
 
-@mcp.resource("shannon://sessions")
+@mcp_server.resource("shannon://sessions")
 @require_initialized
 async def get_sessions() -> str:
     """Active Claude Code sessions with current state."""
@@ -2710,7 +2717,7 @@ async def get_sessions() -> str:
     }, indent=2)
 
 
-@mcp.resource("shannon://sessions/{session_id}")
+@mcp_server.resource("shannon://sessions/{session_id}")
 @require_initialized
 async def get_session_details(session_id: str) -> str:
     """Detailed information about a specific session."""
@@ -2726,7 +2733,7 @@ async def get_session_details(session_id: str) -> str:
     return json.dumps(details, indent=2)
 
 
-@mcp.resource("shannon://agents/{agent_id}")
+@mcp_server.resource("shannon://agents/{agent_id}")
 @require_initialized
 async def get_agent_details(agent_id: str) -> str:
     """Detailed information about a specific agent."""
@@ -2743,7 +2750,7 @@ async def get_agent_details(agent_id: str) -> str:
     return json.dumps(details, indent=2)
 
 
-@mcp.resource("shannon://checkpoints")
+@mcp_server.resource("shannon://checkpoints")
 @require_initialized
 async def get_checkpoints() -> str:
     """List all available checkpoints."""
@@ -2756,7 +2763,7 @@ async def get_checkpoints() -> str:
     }, indent=2)
 
 
-@mcp.resource("shannon://hooks")
+@mcp_server.resource("shannon://hooks")
 @require_initialized
 async def get_hooks() -> str:
     """List all registered hooks."""
@@ -2769,7 +2776,7 @@ async def get_hooks() -> str:
     }, indent=2)
 
 
-@mcp.resource("shannon://analytics/summary")
+@mcp_server.resource("shannon://analytics/summary")
 @require_initialized
 async def get_analytics_summary() -> str:
     """Analytics summary for the server."""
@@ -2778,7 +2785,7 @@ async def get_analytics_summary() -> str:
     return json.dumps(summary, indent=2)
 
 
-@mcp.resource("shannon://health")
+@mcp_server.resource("shannon://health")
 @require_initialized
 async def get_health_status() -> str:
     """Server health status."""
@@ -2806,7 +2813,7 @@ async def get_health_status() -> str:
     }, indent=2)
 
 
-@mcp.resource("shannon://logs/recent")
+@mcp_server.resource("shannon://logs/recent")
 @require_initialized
 async def get_recent_logs() -> str:
     """Recent server logs for debugging."""
@@ -2851,7 +2858,7 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 # ===== ERROR HANDLERS =====
 
 # FastMCP doesn't support error_handler decorator, so we'll handle errors within each tool
-# @mcp.error_handler(ShannonMCPError)
+# @mcp_server.error_handler(ShannonMCPError)
 # async def handle_shannon_error(error: ShannonMCPError) -> Dict[str, Any]:
 #     """Handle Shannon MCP specific errors."""
 #     logger.error(f"Shannon MCP error: {error}")
@@ -2862,7 +2869,7 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 #     }
 # 
 # 
-# @mcp.error_handler(Exception)
+# @mcp_server.error_handler(Exception)
 # async def handle_general_error(error: Exception) -> Dict[str, Any]:
 #     """Handle general errors."""
 #     logger.error(f"Unexpected error: {error}", exc_info=True)
@@ -2878,7 +2885,7 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 
 # ===== FASTMCP INITIALIZATION =====
 
-@mcp.run()
+@mcp_server.run()
 async def on_startup():
     """Initialize the server when MCP starts."""
     logger.debug("FastMCP on_startup called")
@@ -2906,7 +2913,7 @@ def main():
     args = parser.parse_args()
     
     if args.version:
-        print(f"Shannon MCP Server v{mcp.version} (Fast MCP Production)")
+        print(f"Shannon MCP Server v{mcp_server.version} (Fast MCP Production)")
         return
     
     # Set configuration overrides
@@ -2930,11 +2937,11 @@ def main():
         )
         
         if args.transport == "stdio":
-            mcp.run(show_banner=False)
+            mcp_server.run(show_banner=False)
         elif args.transport == "sse":
-            mcp.run(transport="sse", port=args.port or 8000)
+            mcp_server.run(transport="sse", port=args.port or 8000)
         elif args.transport == "websocket":
-            mcp.run(transport="websocket", port=args.port or 8001)
+            mcp_server.run(transport="websocket", port=args.port or 8001)
             
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

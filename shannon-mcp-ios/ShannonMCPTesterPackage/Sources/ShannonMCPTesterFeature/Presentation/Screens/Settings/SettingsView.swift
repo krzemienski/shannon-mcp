@@ -114,6 +114,9 @@ struct ConnectionSettingsSection: View {
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .frame(width: 200)
                     .font(.system(.body, design: .monospaced))
+                    .accessibilityIdentifier(AccessibilityIdentifiers.serverURLField)
+                    .accessibilityLabel("Server URL")
+                    .accessibilityHint("Enter the MCP server URL")
             }
             
             Picker("Transport", selection: $transport) {
@@ -121,8 +124,11 @@ struct ConnectionSettingsSection: View {
                     Text(type.rawValue).tag(type)
                 }
             }
+            .accessibilityIdentifier(AccessibilityIdentifiers.transportPicker)
             
             Toggle("Auto Reconnect", isOn: $autoReconnect)
+                .accessibilityLabel("Auto Reconnect")
+                .accessibilityHint("Automatically reconnect when connection is lost")
             
             if autoReconnect {
                 HStack {
@@ -132,8 +138,13 @@ struct ConnectionSettingsSection: View {
                         .foregroundColor(.secondary)
                 }
                 Slider(value: $reconnectDelay, in: 1...30, step: 1)
+                    .accessibilityLabel("Reconnect Delay")
+                    .accessibilityValue("\(Int(reconnectDelay)) seconds")
+                    .accessibilityHint("Adjust delay between reconnection attempts")
                 
                 Stepper("Max Attempts: \(maxReconnectAttempts)", value: $maxReconnectAttempts, in: 1...10)
+                    .accessibilityLabel("Maximum reconnection attempts")
+                    .accessibilityValue("\(maxReconnectAttempts)")
             }
         }
     }
@@ -159,9 +170,13 @@ struct PerformanceSettingsSection: View {
                     get: { Double(streamingBufferSize) },
                     set: { streamingBufferSize = Int($0) }
                 ), in: 8192...65536, step: 8192)
+                    .accessibilityLabel("Streaming buffer size")
+                    .accessibilityValue("\(streamingBufferSize / 1024) kilobytes")
+                    .accessibilityHint("Adjust buffer size for streaming performance")
                 Text("Larger buffers improve throughput but use more memory")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .accessibilityHidden(true)
             }
             
             VStack(alignment: .leading) {
@@ -175,9 +190,14 @@ struct PerformanceSettingsSection: View {
                     get: { Double(maxMessagesPerSecond) },
                     set: { maxMessagesPerSecond = Int($0) }
                 ), in: 1000...50000, step: 1000)
+                    .accessibilityLabel("Maximum messages per second")
+                    .accessibilityValue("\(maxMessagesPerSecond) messages")
+                    .accessibilityHint("Set the maximum rate for message processing")
             }
             
             Toggle("Enable Backpressure", isOn: $enableBackpressure)
+                .accessibilityLabel("Enable backpressure")
+                .accessibilityHint("Automatically slow down when buffers are full")
         }
     }
 }
@@ -249,16 +269,23 @@ struct DataManagementSection: View {
             Button(action: onExportData) {
                 Label("Export Data", systemImage: "square.and.arrow.up")
             }
+            .accessibilityLabel("Export data")
+            .accessibilityHint("Export all sessions and analytics data")
             
             Button(action: onClearCache) {
                 Label("Clear Cache", systemImage: "trash")
             }
             .foregroundColor(.orange)
+            .accessibilityLabel("Clear cache")
+            .accessibilityHint("Remove temporary cached data")
             
             Button(action: onResetApp) {
                 Label("Reset App", systemImage: "exclamationmark.triangle")
             }
             .foregroundColor(.red)
+            .accessibilityLabel("Reset app")
+            .accessibilityHint("Delete all data and reset settings. This cannot be undone.")
+            .accessibilityAddTraits(.isDestructiveAction)
         }
     }
 }

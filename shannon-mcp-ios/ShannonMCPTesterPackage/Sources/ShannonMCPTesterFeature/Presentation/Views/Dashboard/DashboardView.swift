@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
+    @StateObject private var performanceMonitor = PerformanceMonitor()
     
     var body: some View {
         NavigationView {
@@ -23,6 +24,16 @@ struct DashboardView: View {
             }
             .navigationTitle("Shannon MCP Tester")
             .navigationBarTitleDisplayMode(.large)
+            .withPerformanceMonitoring(performanceMonitor)
+            .onAppear {
+                performanceMonitor.startMonitoring()
+                logger.info("Dashboard appeared", category: .ui)
+                logger.logUserAction(action: "view_dashboard", screen: "dashboard")
+            }
+            .onDisappear {
+                performanceMonitor.stopMonitoring()
+                logger.debug("Dashboard disappeared", category: .ui)
+            }
         }
     }
     
@@ -32,6 +43,7 @@ struct DashboardView: View {
                 Image(systemName: appState.isConnected ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(appState.isConnected ? .green : .red)
                     .font(.title2)
+                    .accessibilityHidden(true)
                 
                 VStack(alignment: .leading) {
                     Text(appState.isConnected ? "Connected" : "Disconnected")
@@ -40,6 +52,9 @@ struct DashboardView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(AccessibilityLabels.connectionStatus(isConnected: appState.isConnected))
+                .accessibilityValue(appState.serverURL)
                 
                 Spacer()
                 
@@ -57,35 +72,16 @@ struct DashboardView: View {
     }
     
     private var statsGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            DashboardStatCard(
-                title: "Active Sessions",
-                value: "\(appState.sessions.filter { $0.state == .running }.count)",
-                icon: "message.fill",
-                color: .blue
-            )
-            
-            DashboardStatCard(
-                title: "Total Agents",
-                value: "\(appState.agents.count)",
-                icon: "cpu",
-                color: .purple
-            )
-            
-            DashboardStatCard(
-                title: "Messages Today",
-                value: "\(appState.analytics.totalMessages)",
-                icon: "chart.line.uptrend.xyaxis",
-                color: .green
-            )
-            
-            DashboardStatCard(
-                title: "Avg Response",
-                value: String(format: "%.1fms", appState.analytics.performanceStats.averageResponseTime * 1000),
-                icon: "clock.fill",
-                color: .orange
-            )
-        }
+        OptimizedMetricsDisplay(metrics: SessionMetrics(
+            messageCount: appState.analytics.totalMessages,
+            averageResponseTime: appState.analytics.performanceStats.averageResponseTime,
+            messagesPerSecond: Double(appState.analytics.totalMessages) / max(1.0, Date().timeIntervalSince(appState.analytics.startTime)),
+            errorRate: appState.analytics.performanceStats.errorRate,
+            totalTokens: appState.analytics.totalTokens,
+            bytesTransferred: appState.analytics.bytesTransferred
+        ))
+        .accessibilityIdentifier(AccessibilityIdentifiers.quickStats)
+        .optimizedForHighFrequencyUpdates()
     }
     
     private var recentSessionsCard: some View {
@@ -93,11 +89,13 @@ struct DashboardView: View {
             HStack {
                 Text("Recent Sessions")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 NavigationLink(destination: SessionsView()) {
                     Text("View All")
                         .font(.caption)
                 }
+                .accessibilityLabel("View all sessions")
             }
             
             VStack(spacing: 8) {
@@ -105,6 +103,7 @@ struct DashboardView: View {
                     SessionRow(session: session)
                 }
             }
+            .accessibilityIdentifier(AccessibilityIdentifiers.sessionsList)
         }
         .padding()
         .background(Color(.systemGray6))
@@ -116,11 +115,13 @@ struct DashboardView: View {
             HStack {
                 Text("Active Agents")
                     .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 NavigationLink(destination: AgentsView()) {
                     Text("View All")
                         .font(.caption)
                 }
+                .accessibilityLabel("View all agents")
             }
             
             ScrollView(.horizontal, showsIndicators: false) {
@@ -130,6 +131,7 @@ struct DashboardView: View {
                     }
                 }
             }
+            .accessibilityLabel("Active agents list. Swipe left or right to browse.")
         }
         .padding()
         .background(Color(.systemGray6))
@@ -148,20 +150,25 @@ struct DashboardStatCard: View {
             HStack {
                 Image(systemName: icon)
                     .foregroundColor(color)
+                    .accessibilityHidden(true)
                 Spacer()
             }
             
             Text(value)
                 .font(.title2)
                 .fontWeight(.bold)
+                .accessibilityLabel("\(title): \(value)")
             
             Text(title)
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .accessibilityHidden(true)
         }
         .padding()
         .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isStaticText)
     }
 }
 
@@ -173,6 +180,7 @@ struct SessionRow: View {
             Circle()
                 .fill(session.state.color)
                 .frame(width: 8, height: 8)
+                .accessibilityHidden(true)
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.prompt)
@@ -189,8 +197,13 @@ struct SessionRow: View {
             Text("\(session.messages.count)")
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .accessibilityLabel("\(session.messages.count) messages")
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(session.prompt), \(AccessibilityLabels.sessionState(session.state)), created \(session.createdAt.formatted(.relative(presentation: .named)))")
+        .accessibilityHint("Tap to view session details")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -202,6 +215,7 @@ struct AgentMiniCard: View {
             Image(systemName: agent.icon)
                 .font(.title2)
                 .foregroundColor(agent.category.color)
+                .accessibilityHidden(true)
             
             Text(agent.name)
                 .font(.caption)
@@ -210,6 +224,10 @@ struct AgentMiniCard: View {
         .frame(width: 80, height: 80)
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(AccessibilityLabels.agentStatus(agent))
+        .accessibilityHint("Tap to view agent details")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
