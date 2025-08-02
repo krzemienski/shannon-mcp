@@ -2063,7 +2063,7 @@ async def mcp_add(
         command: Command to run the server
         args: Optional command arguments
         env: Optional environment variables
-        transport: Transport type (stdio, sse, http, websocket)
+        transport: Transport type (stdio, sse, http)
         enabled: Whether to enable the server immediately
     
     Returns:
@@ -2571,8 +2571,8 @@ async def mcp_serve(
     
     Args:
         name: Name of the server to start
-        port: Optional port for SSE/HTTP/WebSocket transports
-        transport: Transport to use (stdio, sse, http, websocket)
+        port: Optional port for SSE/HTTP transports
+        transport: Transport to use (stdio, sse, http)
         auto_restart: Whether to auto-restart on failure
     
     Returns:
@@ -3331,7 +3331,6 @@ async def apply_transforms(data: Dict[str, Any], transforms: List[Dict[str, Any]
 
 # ===== FASTMCP INITIALIZATION =====
 
-@mcp_server.run()
 async def on_startup():
     """Initialize the server when MCP starts."""
     logger.debug("FastMCP on_startup called")
@@ -3353,7 +3352,7 @@ def main():
     parser.add_argument("--config", type=str, help="Config file path")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--port", type=int, help="Port for HTTP transport")
-    parser.add_argument("--transport", choices=["stdio", "sse", "websocket"], 
+    parser.add_argument("--transport", choices=["stdio", "sse"], 
                       default="stdio", help="Transport type")
     
     args = parser.parse_args()
@@ -3386,8 +3385,6 @@ def main():
             mcp_server.run(show_banner=False)
         elif args.transport == "sse":
             mcp_server.run(transport="sse", port=args.port or 8000)
-        elif args.transport == "websocket":
-            mcp_server.run(transport="websocket", port=args.port or 8001)
             
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

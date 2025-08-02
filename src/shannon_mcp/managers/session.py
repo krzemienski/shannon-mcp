@@ -622,6 +622,44 @@ class SessionManager(BaseManager[Session]):
         
         return messages
     
+    async def get_session_live_stream(self, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get live streaming output from a Claude Code session (replaces Tauri events).
+        
+        This method provides real-time output that replaces the claude-output, 
+        claude-error, and claude-complete Tauri events from Claudia.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            List of stream messages with type, message, and timestamp
+            
+        Raises:
+            ValidationError: If session not found
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValidationError("session_id", session_id, "Session not found")
+        
+        # Convert session messages to stream format expected by frontend
+        stream_messages = []
+        
+        for message in session.messages:
+            stream_message = {
+                "type": message.role,  # "user", "assistant", "system"
+                "message": {
+                    "content": message.content,
+                    "usage": getattr(message, "usage", None)
+                },
+                "timestamp": message.timestamp.isoformat() if message.timestamp else None,
+                "isMeta": message.role == "system",
+                "leafUuid": getattr(message, "id", None)
+            }
+            stream_messages.append(stream_message)
+        
+        return stream_messages
+    
     async def create_checkpoint(self, session_id: str) -> str:
         """
         Create a checkpoint for a session.
