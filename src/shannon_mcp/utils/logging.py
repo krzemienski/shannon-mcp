@@ -12,6 +12,7 @@ This module provides centralized logging setup with:
 import logging
 import logging.handlers
 import sys
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any
 import json

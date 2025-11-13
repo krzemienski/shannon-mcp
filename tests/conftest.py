@@ -17,7 +17,7 @@ import os
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from shannon_mcp.utils.config import Config
+from shannon_mcp.utils.config import ShannonConfig
 from shannon_mcp.storage.database import Database
 from shannon_mcp.managers.binary import BinaryManager
 from shannon_mcp.managers.session import SessionManager
@@ -73,19 +73,19 @@ async def test_db(temp_dir: Path) -> AsyncGenerator[Database, None]:
 
 
 @pytest.fixture
-def test_config(temp_dir: Path) -> Config:
+def test_config(temp_dir: Path) -> ShannonConfig:
     """Create test configuration."""
     config_path = temp_dir / "config.json"
     config_path.write_text(json.dumps(TEST_CONFIG))
-    
-    config = Config()
+
+    config = ShannonConfig()
     config._config = TEST_CONFIG
     config._config_path = config_path
     return config
 
 
 @pytest.fixture
-async def binary_manager(test_db: Database, test_config: Config) -> AsyncGenerator[BinaryManager, None]:
+async def binary_manager(test_db: Database, test_config: ShannonConfig) -> AsyncGenerator[BinaryManager, None]:
     """Create a test binary manager."""
     manager = BinaryManager(test_db, test_config)
     await manager.start()
@@ -94,7 +94,7 @@ async def binary_manager(test_db: Database, test_config: Config) -> AsyncGenerat
 
 
 @pytest.fixture
-async def session_manager(test_db: Database, test_config: Config, binary_manager: BinaryManager) -> AsyncGenerator[SessionManager, None]:
+async def session_manager(test_db: Database, test_config: ShannonConfig, binary_manager: BinaryManager) -> AsyncGenerator[SessionManager, None]:
     """Create a test session manager."""
     manager = SessionManager(test_db, test_config, binary_manager)
     await manager.start()
@@ -103,7 +103,7 @@ async def session_manager(test_db: Database, test_config: Config, binary_manager
 
 
 @pytest.fixture
-async def agent_manager(test_db: Database, test_config: Config) -> AsyncGenerator[AgentManager, None]:
+async def agent_manager(test_db: Database, test_config: ShannonConfig) -> AsyncGenerator[AgentManager, None]:
     """Create a test agent manager."""
     manager = AgentManager(test_db, test_config)
     await manager.start()
@@ -231,4 +231,4 @@ async def wait_for_condition(condition_func, timeout=5.0, interval=0.1):
 
 
 # Logging setup for tests
-setup_logging(level="DEBUG", format_type="simple")
+setup_logging(log_level="DEBUG", enable_json=False)

@@ -644,6 +644,11 @@ class EventHandler:
     pass
 
 
+# Backward compatibility aliases
+NotificationCenter = EventBus
+NotificationType = EventCategory
+
+
 # Export public API
 __all__ = [
     'Event',
@@ -661,4 +666,6 @@ __all__ = [
     'event_handler',
     'EventEmitter',
     'setup_notifications',
+    'NotificationCenter',
+    'NotificationType',
 ]
