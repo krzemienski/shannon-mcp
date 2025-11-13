@@ -392,6 +392,47 @@ class SecurityError(ShannonError):
         ]
 
 
+# Agent Errors
+
+class AgentError(ShannonError):
+    """Agent-related errors."""
+    code = "AGENT_ERROR"
+    default_message = "Agent error occurred"
+    category = ErrorCategory.SYSTEM
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
+
+    def get_retry_after(self) -> Optional[int]:
+        return 10  # 10 seconds
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check agent configuration",
+            "Verify agent capabilities",
+            "Review agent execution logs"
+        ]
+
+
+class SDKError(ShannonError):
+    """Python Agents SDK-related errors."""
+    code = "SDK_ERROR"
+    default_message = "SDK error occurred"
+    category = ErrorCategory.EXTERNAL_SERVICE
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
+
+    def get_retry_after(self) -> Optional[int]:
+        return 5  # 5 seconds
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Ensure claude-agent-sdk is installed",
+            "Check SDK version compatibility",
+            "Verify Node.js is installed (required by SDK)",
+            "Review SDK configuration"
+        ]
+
+
 # MCP Protocol Errors
 
 class MCPError(ShannonError):

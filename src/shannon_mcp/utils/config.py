@@ -127,6 +127,96 @@ class AgentManagerConfig(BaseModel):
     performance_tracking: bool = True
 
 
+class AgentSDKConfig(BaseModel):
+    """Python Agents SDK integration configuration."""
+    # Enable/disable SDK
+    enabled: bool = Field(
+        default=True,
+        description="Enable Python Agents SDK integration"
+    )
+
+    # Agent storage
+    agents_directory: Path = Field(
+        default_factory=lambda: Path.home() / ".claude" / "agents",
+        description="Directory for SDK agent Markdown files"
+    )
+
+    # Orchestration
+    use_subagents: bool = Field(
+        default=True,
+        description="Enable subagent parallelization"
+    )
+
+    max_subagents_per_task: int = Field(
+        default=5,
+        description="Maximum subagents spawned per task"
+    )
+
+    # Context management
+    max_context_size: int = Field(
+        default=200000,
+        description="Maximum context window size (tokens)"
+    )
+
+    auto_compact_threshold: float = Field(
+        default=0.8,
+        description="Auto-compact when context reaches this % of max"
+    )
+
+    # Permissions
+    permission_mode: str = Field(
+        default="acceptEdits",
+        description="Permission mode: 'acceptEdits', 'requireApproval', 'denyEdits'"
+    )
+
+    allowed_tools: List[str] = Field(
+        default_factory=lambda: ['Read', 'Write', 'Bash'],
+        description="Default allowed tools for agents"
+    )
+
+    # Memory
+    memory_directory: Path = Field(
+        default_factory=lambda: Path.home() / ".claude" / "memory",
+        description="Directory for agent memory files"
+    )
+
+    generate_claude_md: bool = Field(
+        default=True,
+        description="Auto-generate CLAUDE.md from shared memory"
+    )
+
+    # Performance
+    execution_timeout: int = Field(
+        default=300,
+        description="Default execution timeout in seconds"
+    )
+
+    max_concurrent_agents: int = Field(
+        default=10,
+        description="Maximum concurrent agent executions"
+    )
+
+    # Migration
+    legacy_fallback_enabled: bool = Field(
+        default=True,
+        description="Fall back to legacy AgentManager if SDK fails"
+    )
+
+    migrate_on_startup: bool = Field(
+        default=False,
+        description="Automatically migrate agents to SDK on startup"
+    )
+
+    # Working directory
+    working_directory: Path = Field(
+        default_factory=Path.cwd,
+        description="Default working directory for agent execution"
+    )
+
+    class Config:
+        arbitrary_types_allowed = True
+
+
 class CheckpointConfig(BaseModel):
     """Checkpoint system configuration."""
     storage_path: Path = Field(default_factory=lambda: Path.home() / ".shannon-mcp" / "checkpoints")
@@ -171,9 +261,9 @@ class ShannonConfig(BaseModel):
     """Main Shannon MCP configuration."""
     # Core settings
     app_name: str = "shannon-mcp"
-    version: str = "0.1.0"
+    version: str = "0.2.0"  # Updated for SDK integration
     debug: bool = False
-    
+
     # Component configurations
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -181,15 +271,19 @@ class ShannonConfig(BaseModel):
     session_manager: SessionManagerConfig = Field(default_factory=SessionManagerConfig)
     agent_system: AgentSystemConfig = Field(default_factory=AgentSystemConfig)
     agent_manager: AgentManagerConfig = Field(default_factory=AgentManagerConfig)
+    agent_sdk: AgentSDKConfig = Field(
+        default_factory=AgentSDKConfig,
+        description="Python Agents SDK configuration"
+    )
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     analytics: AnalyticsConfig = Field(default_factory=AnalyticsConfig)
-    
+
     # Runtime settings
     enable_hot_reload: bool = True
     config_paths: List[Path] = Field(default_factory=list)
-    
+
     class Config:
         arbitrary_types_allowed = True
         validate_assignment = True
