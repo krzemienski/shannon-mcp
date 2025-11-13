@@ -297,14 +297,120 @@ class ExternalServiceError(ShannonError):
     category = ErrorCategory.EXTERNAL_SERVICE
     severity = ErrorSeverity.ERROR
     is_retryable = True
-    
+
     def __init__(self, service_name: str, **kwargs):
         self.service_name = service_name
         message = f"Error communicating with external service: {service_name}"
         super().__init__(message, **kwargs)
-    
+
     def get_retry_after(self) -> Optional[int]:
         return 30  # 30 seconds
+
+
+# Storage Errors
+
+class StorageError(ShannonError):
+    """Storage-related errors."""
+    code = "STORAGE_ERROR"
+    default_message = "Storage error occurred"
+    category = ErrorCategory.DATABASE
+    severity = ErrorSeverity.ERROR
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check storage system availability",
+            "Verify disk space and permissions",
+            "Check for filesystem errors"
+        ]
+
+
+class CacheError(ShannonError):
+    """Cache-related errors."""
+    code = "CACHE_ERROR"
+    default_message = "Cache error occurred"
+    category = ErrorCategory.SYSTEM
+    severity = ErrorSeverity.WARNING
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check cache configuration",
+            "Verify cache backend is available",
+            "Consider clearing cache if corrupted"
+        ]
+
+
+# Streaming Errors
+
+class StreamError(ShannonError):
+    """Stream-related errors."""
+    code = "STREAM_ERROR"
+    default_message = "Stream error occurred"
+    category = ErrorCategory.SYSTEM
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
+
+    def get_retry_after(self) -> Optional[int]:
+        return 5  # 5 seconds
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check stream connection status",
+            "Verify stream is not closed",
+            "Check for buffer overflow"
+        ]
+
+
+# Hook Errors
+
+class HookExecutionError(ShannonError):
+    """Hook execution errors."""
+    code = "HOOK_EXECUTION_ERROR"
+    default_message = "Hook execution failed"
+    category = ErrorCategory.SYSTEM
+    severity = ErrorSeverity.ERROR
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check hook script syntax",
+            "Verify hook has required permissions",
+            "Review hook execution logs"
+        ]
+
+
+class SecurityError(ShannonError):
+    """Security-related errors."""
+    code = "SECURITY_ERROR"
+    default_message = "Security violation detected"
+    category = ErrorCategory.AUTHORIZATION
+    severity = ErrorSeverity.CRITICAL
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Review security configuration",
+            "Check access permissions",
+            "Verify user credentials"
+        ]
+
+
+# MCP Protocol Errors
+
+class MCPError(ShannonError):
+    """MCP protocol errors."""
+    code = "MCP_ERROR"
+    default_message = "MCP protocol error"
+    category = ErrorCategory.EXTERNAL_SERVICE
+    severity = ErrorSeverity.ERROR
+    is_retryable = True
+
+    def get_retry_after(self) -> Optional[int]:
+        return 3  # 3 seconds
+
+    def get_suggestions(self) -> List[str]:
+        return [
+            "Check MCP protocol compatibility",
+            "Verify message format",
+            "Review MCP connection status"
+        ]
 
 
 # Error Handler Decorator
@@ -549,7 +655,7 @@ __all__ = [
     'ErrorInfo',
     'ErrorSeverity',
     'ErrorCategory',
-    
+
     # Error types
     'SystemError',
     'ConfigurationError',
@@ -563,7 +669,13 @@ __all__ = [
     'AuthenticationError',
     'AuthorizationError',
     'ExternalServiceError',
-    
+    'StorageError',
+    'CacheError',
+    'StreamError',
+    'HookExecutionError',
+    'SecurityError',
+    'MCPError',
+
     # Utilities
     'handle_errors',
     'error_context',
