@@ -73,9 +73,17 @@ class AgentManager(BaseManager[Agent]):
     
     def __init__(self, config: AgentManagerConfig):
         """Initialize agent manager."""
+        # Use PostgreSQL from environment or default to local PostgreSQL
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
+
         manager_config = ManagerConfig(
             name="agent_manager",
-            db_path=Path.home() / ".shannon-mcp" / "agents.db",
+            database_url=db_url,
+            enable_notifications=False,  # Keep notifications disabled
             custom_config=config.dict()
         )
         super().__init__(manager_config)
@@ -95,19 +103,10 @@ class AgentManager(BaseManager[Agent]):
     async def _initialize(self) -> None:
         """Initialize agent manager."""
         logger.info("initializing_agent_manager")
-        
-        # Load default agents
-        if self.agent_config.enable_default_agents:
-            await self._load_default_agents()
-        
-        # Import GitHub agents
-        if self.agent_config.github_org:
-            await self._import_github_agents()
-        
-        # Start message processor
-        self._tasks.append(
-            asyncio.create_task(self._process_messages())
-        )
+
+        # Defer agent loading to prevent blocking during initialization
+        # Agents will be loaded lazily on first use
+        logger.info("agent_loading_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start agent manager operations."""

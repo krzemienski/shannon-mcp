@@ -163,9 +163,15 @@ class MCPServerManager(BaseManager[MCPServer]):
     
     def __init__(self, config: MCPConfig):
         """Initialize MCP server manager."""
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
         manager_config = ManagerConfig(
             name="mcp_server_manager",
-            db_path=Path.home() / ".shannon-mcp" / "mcp_servers.db",
+            database_url=db_url,
+            enable_notifications=False,
             custom_config=config.dict()
         )
         super().__init__(manager_config)
@@ -186,23 +192,17 @@ class MCPServerManager(BaseManager[MCPServer]):
     async def _initialize(self) -> None:
         """Initialize MCP server manager."""
         logger.info("initializing_mcp_server_manager")
-        
-        # Create HTTP session
+
+        # Create HTTP session (lightweight)
         self._http_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=self.mcp_config.connection_timeout)
         )
-        
-        # Load servers from database
-        await self._load_servers()
-        
-        # Register message handlers
+
+        # Register message handlers (lightweight)
         self._register_message_handlers()
-        
-        # Start auto-discovery if enabled
-        if self.mcp_config.auto_discovery:
-            self._tasks.append(
-                asyncio.create_task(self._auto_discovery_loop())
-            )
+
+        # Defer server loading to prevent blocking
+        logger.info("mcp_server_loading_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start MCP server manager."""

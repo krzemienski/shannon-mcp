@@ -169,9 +169,17 @@ class SessionManager(BaseManager[Session]):
     
     def __init__(self, config: SessionManagerConfig, binary_manager: BinaryManager):
         """Initialize session manager."""
+        # Use PostgreSQL from environment or default to local PostgreSQL
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
+
         manager_config = ManagerConfig(
             name="session_manager",
-            db_path=Path.home() / ".shannon-mcp" / "sessions.db",
+            database_url=db_url,
+            enable_notifications=False,  # Keep notifications disabled
             custom_config=config.dict()
         )
         super().__init__(manager_config)
@@ -204,16 +212,13 @@ class SessionManager(BaseManager[Session]):
     async def _initialize(self) -> None:
         """Initialize session manager."""
         logger.info("initializing_session_manager")
-        
+
         # Import StreamProcessor here to avoid circular imports
         from ..streaming.processor import StreamProcessor
         self._stream_processor = StreamProcessor(self)
-        
-        # Initialize cache
-        await self._session_cache.initialize()
-        
-        # Load active sessions from database
-        await self._load_active_sessions()
+
+        # Defer cache and session loading to prevent blocking
+        logger.info("session_init_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start session manager operations."""

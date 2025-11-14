@@ -234,7 +234,7 @@ class EventBus:
     ) -> None:
         """
         Emit an event.
-        
+
         Args:
             name: Event name
             category: Event category
@@ -253,17 +253,21 @@ class EventBus:
             correlation_id=correlation_id,
             metadata=metadata
         )
-        
+
         # Add to history
         self._add_to_history(event)
-        
-        # Queue for processing
-        await self._event_queue.put(event)
-        
-        # Start processor if not running
-        if not self._processing:
+
+        # Queue for processing (but don't block on it)
+        # Use try_put to avoid blocking if queue is full
+        try:
+            self._event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("event_queue_full", event_name=name)
+
+        # Start processor if not running (non-blocking)
+        if not self._processing and not self._processor_task:
             self._processor_task = asyncio.create_task(self._process_events())
-        
+
         logger.debug(
             "event_emitted",
             event_name=name,

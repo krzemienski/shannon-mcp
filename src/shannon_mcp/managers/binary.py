@@ -105,13 +105,21 @@ class BinaryManager(BaseManager[BinaryInfo]):
     
     def __init__(self, config: BinaryManagerConfig):
         """Initialize binary manager."""
+        # Use PostgreSQL from environment or default to local PostgreSQL
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
+
         manager_config = ManagerConfig(
             name="binary_manager",
-            db_path=Path.home() / ".shannon-mcp" / "binary.db",
+            database_url=db_url,
+            enable_notifications=False,  # Keep notifications disabled
             custom_config=config.dict()
         )
         super().__init__(manager_config)
-        
+
         self.binary_config = config
         self._binary_cache: Optional[BinaryInfo] = None
         self._cache_expires: Optional[datetime] = None
@@ -177,12 +185,10 @@ class BinaryManager(BaseManager[BinaryInfo]):
     async def _initialize(self) -> None:
         """Initialize binary manager."""
         logger.info("initializing_binary_manager")
-        
-        # Discover binary on initialization
-        try:
-            await self.discover_binary()
-        except Exception as e:
-            logger.warning("initial_discovery_failed", error=str(e))
+
+        # Skip automatic discovery during initialization to prevent blocking
+        # Discovery will happen on first use instead
+        logger.info("binary_discovery_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start binary manager operations."""
