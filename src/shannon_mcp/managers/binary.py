@@ -177,12 +177,10 @@ class BinaryManager(BaseManager[BinaryInfo]):
     async def _initialize(self) -> None:
         """Initialize binary manager."""
         logger.info("initializing_binary_manager")
-        
-        # Discover binary on initialization
-        try:
-            await self.discover_binary()
-        except Exception as e:
-            logger.warning("initial_discovery_failed", error=str(e))
+
+        # Skip automatic discovery during initialization to prevent blocking
+        # Discovery will happen on first use instead
+        logger.info("binary_discovery_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start binary manager operations."""

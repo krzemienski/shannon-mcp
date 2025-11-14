@@ -204,16 +204,13 @@ class SessionManager(BaseManager[Session]):
     async def _initialize(self) -> None:
         """Initialize session manager."""
         logger.info("initializing_session_manager")
-        
+
         # Import StreamProcessor here to avoid circular imports
         from ..streaming.processor import StreamProcessor
         self._stream_processor = StreamProcessor(self)
-        
-        # Initialize cache
-        await self._session_cache.initialize()
-        
-        # Load active sessions from database
-        await self._load_active_sessions()
+
+        # Defer cache and session loading to prevent blocking
+        logger.info("session_init_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start session manager operations."""

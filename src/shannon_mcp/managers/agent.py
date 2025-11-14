@@ -95,19 +95,10 @@ class AgentManager(BaseManager[Agent]):
     async def _initialize(self) -> None:
         """Initialize agent manager."""
         logger.info("initializing_agent_manager")
-        
-        # Load default agents
-        if self.agent_config.enable_default_agents:
-            await self._load_default_agents()
-        
-        # Import GitHub agents
-        if self.agent_config.github_org:
-            await self._import_github_agents()
-        
-        # Start message processor
-        self._tasks.append(
-            asyncio.create_task(self._process_messages())
-        )
+
+        # Defer agent loading to prevent blocking during initialization
+        # Agents will be loaded lazily on first use
+        logger.info("agent_loading_deferred", reason="prevent_init_blocking")
     
     async def _start(self) -> None:
         """Start agent manager operations."""
