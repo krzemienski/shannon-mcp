@@ -163,10 +163,15 @@ class MCPServerManager(BaseManager[MCPServer]):
     
     def __init__(self, config: MCPConfig):
         """Initialize MCP server manager."""
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
         manager_config = ManagerConfig(
             name="mcp_server_manager",
-            db_path=None,  # Disable database to prevent initialization hangs
-            enable_notifications=False,  # Disable notifications
+            database_url=db_url,
+            enable_notifications=False,
             custom_config=config.dict()
         )
         super().__init__(manager_config)

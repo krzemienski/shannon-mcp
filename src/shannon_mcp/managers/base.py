@@ -11,10 +11,12 @@ This module provides the foundation for all manager components with:
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Callable, TypeVar, Generic
+from typing import Optional, Dict, Any, List, Callable, TypeVar, Generic, Union
 from pathlib import Path
 import asyncio
 import aiosqlite
+import asyncpg
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -59,6 +61,7 @@ class ManagerConfig:
     """Base configuration for all managers."""
     name: str
     db_path: Optional[Path] = None
+    database_url: Optional[str] = None  # PostgreSQL connection URL
     enable_metrics: bool = True
     enable_notifications: bool = True
     health_check_interval: int = 60  # seconds
@@ -94,12 +97,13 @@ class BaseManager(ABC, Generic[T]):
         self.config = config
         self.logger = get_logger(f"shannon-mcp.managers.{config.name}")
         self.state = ManagerState.UNINITIALIZED
-        self.db: Optional[aiosqlite.Connection] = None
+        self.db: Optional[Union[aiosqlite.Connection, asyncpg.Connection]] = None
         self._event_handlers: Dict[str, List[Callable]] = {}
         self._health_status = HealthStatus(healthy=True, last_check=datetime.utcnow())
         self._health_task: Optional[asyncio.Task] = None
         self._recovery_attempts = 0
         self._tasks: List[asyncio.Task] = []
+        self._is_postgres = bool(config.database_url)
         
     @property
     def is_ready(self) -> bool:
@@ -125,9 +129,9 @@ class BaseManager(ABC, Generic[T]):
         
         try:
             # Set up database if configured
-            if self.config.db_path:
+            if self.config.db_path or self.config.database_url:
                 await self._setup_database()
-            
+
             # Perform component-specific initialization
             await self._initialize()
             
@@ -289,20 +293,53 @@ class BaseManager(ABC, Generic[T]):
     
     async def _setup_database(self) -> None:
         """Set up database connection and schema."""
-        if not self.config.db_path:
+        # PostgreSQL connection
+        if self.config.database_url:
+            try:
+                # Try to connect with a 2-second timeout
+                self.db = await asyncio.wait_for(
+                    asyncpg.connect(self.config.database_url),
+                    timeout=2.0
+                )
+                self.logger.info("connected_to_postgresql")
+
+                # Create component-specific schema
+                await self._create_schema()
+                return
+            except asyncio.TimeoutError:
+                self.logger.error("postgresql_connection_timeout")
+                # Fall back to in-memory SQLite if PostgreSQL fails
+                self.logger.warning("falling_back_to_sqlite")
+                self._is_postgres = False
+            except Exception as e:
+                self.logger.error("postgresql_connection_failed", error=str(e))
+                # Fall back to in-memory SQLite if PostgreSQL fails
+                self.logger.warning("falling_back_to_sqlite")
+                self._is_postgres = False
+
+        # SQLite connection (or fallback)
+        if self.config.db_path:
+            self.config.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.db = await aiosqlite.connect(str(self.config.db_path))
+        elif self.config.database_url:
+            # PostgreSQL failed, use in-memory SQLite as fallback
+            self.db = await aiosqlite.connect(":memory:")
+            self.logger.info("using_in_memory_sqlite_fallback")
+        else:
+            # No database configured
             return
-        
-        self.config.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = await aiosqlite.connect(str(self.config.db_path))
-        self.db.row_factory = aiosqlite.Row
-        
-        # Enable foreign keys and WAL mode
-        await self.db.execute("PRAGMA foreign_keys = ON")
-        await self.db.execute("PRAGMA journal_mode = WAL")
-        
-        # Create component-specific schema
-        await self._create_schema()
-        await self.db.commit()
+
+        if self.db:
+            self.db.row_factory = aiosqlite.Row
+
+            # Enable foreign keys and WAL mode (WAL won't work for :memory:)
+            await self.db.execute("PRAGMA foreign_keys = ON")
+            if self.config.db_path:  # Only use WAL for file-based databases
+                await self.db.execute("PRAGMA journal_mode = WAL")
+
+            # Create component-specific schema
+            await self._create_schema()
+            await self.db.commit()
     
     async def _health_monitor(self) -> None:
         """Background task for health monitoring."""

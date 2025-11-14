@@ -73,10 +73,17 @@ class AgentManager(BaseManager[Agent]):
     
     def __init__(self, config: AgentManagerConfig):
         """Initialize agent manager."""
+        # Use PostgreSQL from environment or default to local PostgreSQL
+        import os
+        db_url = os.getenv(
+            'SHANNON_POSTGRES_URL',
+            'postgresql://shannon:shannon@localhost:5432/shannon_mcp'
+        )
+
         manager_config = ManagerConfig(
             name="agent_manager",
-            db_path=None,  # Disable database to prevent initialization hangs
-            enable_notifications=False,  # Disable notifications
+            database_url=db_url,
+            enable_notifications=False,  # Keep notifications disabled
             custom_config=config.dict()
         )
         super().__init__(manager_config)
