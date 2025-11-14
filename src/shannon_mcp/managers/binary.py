@@ -107,11 +107,12 @@ class BinaryManager(BaseManager[BinaryInfo]):
         """Initialize binary manager."""
         manager_config = ManagerConfig(
             name="binary_manager",
-            db_path=Path.home() / ".shannon-mcp" / "binary.db",
+            db_path=None,  # Disable database to prevent initialization hangs
+            enable_notifications=False,  # Disable notifications
             custom_config=config.dict()
         )
         super().__init__(manager_config)
-        
+
         self.binary_config = config
         self._binary_cache: Optional[BinaryInfo] = None
         self._cache_expires: Optional[datetime] = None

@@ -165,7 +165,8 @@ class MCPServerManager(BaseManager[MCPServer]):
         """Initialize MCP server manager."""
         manager_config = ManagerConfig(
             name="mcp_server_manager",
-            db_path=Path.home() / ".shannon-mcp" / "mcp_servers.db",
+            db_path=None,  # Disable database to prevent initialization hangs
+            enable_notifications=False,  # Disable notifications
             custom_config=config.dict()
         )
         super().__init__(manager_config)
