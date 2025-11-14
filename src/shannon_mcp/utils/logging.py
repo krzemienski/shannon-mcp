@@ -28,8 +28,8 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 # Install rich traceback handler for better error display
 install_rich_traceback()
 
-# Console for rich output
-console = Console()
+# Console for rich output - use stderr to avoid interfering with MCP protocol on stdout
+console = Console(file=sys.stderr, stderr=True)
 
 
 class JSONFormatter(logging.Formatter):
